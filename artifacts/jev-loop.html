@@ -1,0 +1,130 @@
+<title>図解ができるまで</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500&family=Noto+Sans+JP:wght@400;500;700&display=swap">
+<style>
+  :root {
+    --ground: #eef2f3; --surface: #ffffff; --ink: #10181c; --muted: #5d6e76;
+    --line: #c3d0d5; --accent: #0d6b7a; --accent-soft: #e1eef0;
+    --pass: #2c7a4d; --fail: #ab3535;
+    --sans: "Noto Sans JP", system-ui, -apple-system, "Hiragino Sans", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0b1013; --surface: #141c20; --ink: #e4edf0; --muted: #8ea1a9;
+      --line: #32444c; --accent: #4cb6c7; --accent-soft: #16303a;
+      --pass: #56b17c; --fail: #e0706b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0b1013; --surface: #141c20; --ink: #e4edf0; --muted: #8ea1a9;
+    --line: #32444c; --accent: #4cb6c7; --accent-soft: #16303a;
+    --pass: #56b17c; --fail: #e0706b;
+  }
+  body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--sans); line-height: 1.6; }
+  .wrap { max-width: 560px; margin: 0 auto; padding-inline: 16px; padding-block: 24px 40px; }
+  h1 { margin: 0 0 4px; font-size: 21px; font-weight: 700; text-wrap: balance; }
+  .lede { margin: 0 0 20px; color: var(--muted); font-size: 14px; }
+  figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 8px; }
+  svg { display: block; width: 100%; height: auto; }
+  figcaption { margin-top: 10px; padding-inline: 8px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+
+  .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+  .box-key { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+  .box-out { fill: var(--surface); stroke: var(--pass); stroke-width: 1.4; }
+  .box-back { fill: var(--surface); stroke: var(--fail); stroke-width: 1.4; }
+  .t { fill: var(--ink); font-family: var(--sans); font-size: 11.5px; }
+  .t-strong { font-weight: 700; }
+  .t-sm { fill: var(--muted); font-size: 10px; font-family: var(--mono); }
+  .arrow { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+  .arrow-back { stroke: var(--fail); stroke-width: 1.4; fill: none; }
+  .arrow-sync { stroke: var(--accent); stroke-width: 1.4; fill: none; stroke-dasharray: 4 3; }
+  .edge-label { fill: var(--muted); font-size: 9.5px; font-family: var(--mono); }
+  .head { fill: var(--muted); }
+  .head-back { fill: var(--fail); }
+  .head-sync { fill: var(--accent); }
+</style>
+
+<div class="wrap">
+  <h1>図解ができるまで</h1>
+  <p class="lede">書いて終わりにせず、毎周 Jev に採点させ、落ちた項目だけを直す。その一周がどう回るか。</p>
+
+  <figure>
+    <svg viewBox="0 0 380 800" role="img" aria-label="依頼から図解の公開までの流れ。Claude が図解を書き、zukai-jev MCP 経由で Jev が7項目を採点し、落ちれば修正して戻り、通れば公開する。判定は毎周記録され、パネルに同期されてスマホから見える。">
+      <defs>
+        <marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+          <path class="head" d="M0,0 L8,4 L0,8 z"/>
+        </marker>
+        <marker id="ahb" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+          <path class="head-back" d="M0,0 L8,4 L0,8 z"/>
+        </marker>
+        <marker id="ahs" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+          <path class="head-sync" d="M0,0 L8,4 L0,8 z"/>
+        </marker>
+      </defs>
+
+      <rect class="box" x="70" y="16" width="240" height="50" rx="6"/>
+      <text class="t" x="190" y="38" text-anchor="middle">依頼 — 説明したい仕組みと</text>
+      <text class="t" x="190" y="54" text-anchor="middle">元資料を渡す</text>
+
+      <path class="arrow" d="M190,66 L190,100" marker-end="url(#ah)"/>
+
+      <rect class="box" x="70" y="104" width="240" height="50" rx="6"/>
+      <text class="t" x="190" y="126" text-anchor="middle">Claude が図解を書く</text>
+      <text class="t-sm" x="190" y="142" text-anchor="middle">artifacts/○○.html</text>
+
+      <path class="arrow" d="M190,154 L190,188" marker-end="url(#ah)"/>
+
+      <rect class="box" x="70" y="192" width="240" height="50" rx="6"/>
+      <text class="t" x="190" y="214" text-anchor="middle">zukai-jev MCP が</text>
+      <text class="t" x="190" y="230" text-anchor="middle">図解と元資料を Jev へ送る</text>
+
+      <path class="arrow" d="M190,242 L190,276" marker-end="url(#ah)"/>
+
+      <rect class="box-key" x="70" y="280" width="240" height="64" rx="6"/>
+      <text class="t t-strong" x="190" y="301" text-anchor="middle">Jev が 7 項目を 0〜1 で採点</text>
+      <text class="t" x="190" y="318" text-anchor="middle">構造・因果・密度・階層・ラベル</text>
+      <text class="t" x="190" y="334" text-anchor="middle">自己完結性・可読性 ＋ 裏付けゲート</text>
+
+      <path class="arrow" d="M190,344 L190,378" marker-end="url(#ah)"/>
+
+      <rect class="box" x="70" y="382" width="240" height="50" rx="6"/>
+      <text class="t t-strong" x="190" y="404" text-anchor="middle">判定</text>
+      <text class="t-sm" x="190" y="420" text-anchor="middle">必須項目が 0.7 未満なら差し戻し</text>
+
+      <path class="arrow-back" d="M130,432 L130,452 L128,452" marker-end="url(#ahb)"/>
+      <path class="arrow" d="M250,432 L250,452 L252,452" marker-end="url(#ah)"/>
+
+      <rect class="box-back" x="18" y="456" width="150" height="54" rx="6"/>
+      <text class="t" x="93" y="477" text-anchor="middle">落ちた項目だけ直す</text>
+      <text class="t-sm" x="93" y="494" text-anchor="middle">3 周で通らねば中止</text>
+
+      <rect class="box-out" x="212" y="456" width="150" height="54" rx="6"/>
+      <text class="t" x="287" y="477" text-anchor="middle">そのまま公開</text>
+      <text class="t-sm" x="287" y="494" text-anchor="middle">verdict: ship</text>
+
+      <path class="arrow-back" d="M18,483 L8,483 L8,129 L66,129" marker-end="url(#ahb)"/>
+      <text class="edge-label" x="22" y="300" transform="rotate(-90 22 300)" text-anchor="middle">書き直して再採点</text>
+
+      <path class="arrow-sync" d="M310,407 L346,407 L346,585 L314,585" marker-end="url(#ahs)"/>
+      <text class="edge-label" x="360" y="500" transform="rotate(-90 360 500)" text-anchor="middle">毎周</text>
+
+      <rect class="box" x="70" y="560" width="240" height="50" rx="6"/>
+      <text class="t" x="190" y="582" text-anchor="middle">判定を記録する</text>
+      <text class="t-sm" x="190" y="598" text-anchor="middle">.jev/runs.jsonl</text>
+
+      <path class="arrow-sync" d="M190,610 L190,644" marker-end="url(#ahs)"/>
+
+      <rect class="box" x="70" y="648" width="240" height="50" rx="6"/>
+      <text class="t" x="190" y="670" text-anchor="middle">品質ゲートパネルへ同期</text>
+      <text class="t-sm" x="190" y="686" text-anchor="middle">Artifact DB</text>
+
+      <path class="arrow-sync" d="M190,698 L190,732" marker-end="url(#ahs)"/>
+
+      <rect class="box-key" x="70" y="736" width="240" height="50" rx="6"/>
+      <text class="t t-strong" x="190" y="758" text-anchor="middle">スマホで稼働と判定を見る</text>
+      <text class="t-sm" x="190" y="774" text-anchor="middle">検査中 / 待機中 · 総合スコア</text>
+    </svg>
+    <figcaption>赤＝差し戻し経路　青破線＝記録と同期　太枠＝Jev が判断する地点</figcaption>
+  </figure>
+</div>

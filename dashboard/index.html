@@ -1,0 +1,405 @@
+<title>Jev 検査パネル</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&display=swap">
+<style>
+  :root {
+    --ground: #eef2f3;
+    --surface: #ffffff;
+    --surface-sunk: #f5f8f9;
+    --ink: #10181c;
+    --muted: #5d6e76;
+    --line: #dbe3e6;
+    --line-strong: #c3d0d5;
+    --accent: #0d6b7a;
+    --pass: #2c7a4d;
+    --warn: #96660a;
+    --fail: #ab3535;
+    --stub: #6b54a0;
+    --sans: "Noto Sans JP", system-ui, -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0b1013;
+      --surface: #141c20;
+      --surface-sunk: #101719;
+      --ink: #e4edf0;
+      --muted: #8ea1a9;
+      --line: #222f35;
+      --line-strong: #32444c;
+      --accent: #4cb6c7;
+      --pass: #56b17c;
+      --warn: #d0a03f;
+      --fail: #e0706b;
+      --stub: #a58ede;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0b1013;
+    --surface: #141c20;
+    --surface-sunk: #101719;
+    --ink: #e4edf0;
+    --muted: #8ea1a9;
+    --line: #222f35;
+    --line-strong: #32444c;
+    --accent: #4cb6c7;
+    --pass: #56b17c;
+    --warn: #d0a03f;
+    --fail: #e0706b;
+    --stub: #a58ede;
+  }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  .wrap {
+    max-width: 640px;
+    margin: 0 auto;
+    padding-inline: 16px;
+    padding-block: 20px 48px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .head h1 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: .01em; }
+  .head .sub { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+
+  .banner {
+    background: color-mix(in srgb, var(--stub) 12%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--stub) 40%, var(--line));
+    color: var(--ink);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+  .banner b { color: var(--stub); }
+
+  /* 稼働状態 — このパネルの主役 */
+  .status {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--muted);
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .status[data-live="running"] { border-left-color: var(--accent); }
+  .status[data-live="error"] { border-left-color: var(--fail); }
+  .status-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--muted); flex: none;
+  }
+  .status[data-live="running"] .dot { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+  .status[data-live="error"] .dot { background: var(--fail); }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.8); } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none !important; } }
+  .status-text { font-weight: 700; font-size: 16px; }
+  .stage { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+  .badge {
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 5px; border: 1px solid currentColor;
+  }
+  .badge.live { color: var(--pass); }
+  .badge.stub { color: var(--stub); }
+
+  .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px 14px; margin: 0; }
+  .meta div { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .meta dt { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-family: var(--mono); }
+  .meta dd { margin: 0; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card h2 { margin: 0 0 2px; font-size: 13px; font-weight: 700; letter-spacing: .04em; color: var(--muted); text-transform: uppercase; font-family: var(--mono); }
+
+  .verdict-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+  .verdict {
+    font-size: 17px; font-weight: 700; padding: 5px 12px; border-radius: 6px;
+    background: var(--surface-sunk); border: 1px solid var(--line-strong);
+  }
+  .verdict[data-v="ship"] { color: var(--pass); border-color: color-mix(in srgb, var(--pass) 50%, var(--line)); }
+  .verdict[data-v="revise"] { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
+  .verdict[data-v="block"] { color: var(--fail); border-color: color-mix(in srgb, var(--fail) 50%, var(--line)); }
+  .overall { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+  .overall b { font-size: 26px; font-weight: 700; letter-spacing: -.02em; }
+  .overall span { font-size: 11px; color: var(--muted); display: block; letter-spacing: .06em; }
+
+  .artifact-name { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+
+  .dims { display: flex; flex-direction: column; gap: 7px; margin-top: 14px; }
+  .dim { display: grid; grid-template-columns: minmax(0, 8em) 1fr 3.2em; align-items: center; gap: 10px; }
+  .dim-label { font-size: 12px; overflow-wrap: anywhere; }
+  .dim-label .block-mark { color: var(--fail); font-family: var(--mono); }
+  .track { position: relative; height: 8px; border-radius: 4px; background: var(--surface-sunk); border: 1px solid var(--line); overflow: hidden; }
+  .fill { position: absolute; inset-block: 0; left: 0; background: var(--pass); }
+  .dim[data-pass="false"] .fill { background: var(--fail); }
+  .dim[data-pass="null"] .fill { background: var(--muted); }
+  .tick { position: absolute; top: -1px; bottom: -1px; width: 2px; background: var(--line-strong); }
+  .dim-val { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+  .dim[data-pass="false"] .dim-val { color: var(--fail); font-weight: 700; }
+
+  .gate-note { margin-top: 12px; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 16px; }
+  .gate-note b { color: var(--ink); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .gate-note .g { white-space: nowrap; }
+  .gate-note .miss { color: var(--fail); font-weight: 700; }
+  .gate-note .legend { flex-basis: 100%; font-size: 12px; }
+
+  .trend { margin-top: 6px; }
+  .trend svg { display: block; width: 100%; height: 72px; overflow: visible; }
+  .trend .grid { stroke: var(--line); stroke-width: 1; fill: none; }
+  .trend .thresh { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
+  .trend .line { stroke: var(--accent); stroke-width: 2; fill: none; stroke-linejoin: round; stroke-linecap: round; }
+  .trend .pt { fill: var(--accent); }
+  .trend .pt-last { fill: var(--surface); stroke: var(--accent); stroke-width: 2.5; }
+  .trend text { font-family: var(--mono); font-size: 9px; fill: var(--muted); }
+
+  .log { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; }
+  .log li { display: grid; grid-template-columns: 2.6em 1fr auto; gap: 10px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .log li:first-child { border-top: none; }
+  .log .it { font-family: var(--mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .log .what { min-width: 0; overflow-wrap: anywhere; }
+  .log .what em { font-style: normal; color: var(--muted); font-size: 12px; }
+  .log .v { font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+  .log .v[data-v="ship"] { color: var(--pass); }
+  .log .v[data-v="revise"] { color: var(--warn); }
+  .log .v[data-v="block"] { color: var(--fail); }
+  .log .v[data-v="unknown"] { color: var(--muted); }
+
+  .foot { font-size: 11.5px; color: var(--muted); font-family: var(--mono); text-align: center; }
+</style>
+
+<div class="wrap">
+  <div class="head">
+    <h1>図解 品質ゲート</h1>
+    <div class="sub">jev &middot; system one</div>
+  </div>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <section class="status" id="status" data-live="idle">
+    <div class="status-line">
+      <span class="dot"></span>
+      <span class="status-text" id="statusText">待機中</span>
+      <span class="stage" id="stage"></span>
+      <span class="badge stub" id="modeBadge">stub</span>
+    </div>
+    <dl class="meta">
+      <div><dt>更新</dt><dd id="mAgo">—</dd></div>
+      <div><dt>反復</dt><dd id="mIter">—</dd></div>
+      <div><dt>応答</dt><dd id="mLatency">—</dd></div>
+      <div><dt>モデル</dt><dd id="mModel">—</dd></div>
+    </dl>
+  </section>
+
+  <section class="card" id="latest">
+    <h2>最新の判定</h2>
+    <div class="artifact-name" id="lArtifact">—</div>
+    <div class="verdict-row">
+      <span class="verdict" id="lVerdict" data-v="unknown">—</span>
+      <span class="overall"><b id="lOverall">—</b><span>総合 / 1.00</span></span>
+    </div>
+    <div class="dims" id="lDims"></div>
+    <div class="gate-note" id="lGateNote"></div>
+  </section>
+
+  <section class="card" id="trendCard" hidden>
+    <h2>反復ごとの推移</h2>
+    <div class="trend" id="trend"></div>
+  </section>
+
+  <section class="card">
+    <h2>履歴</h2>
+    <ul class="log" id="log"></ul>
+  </section>
+
+  <div class="foot" id="foot">.jev/runs.jsonl &rarr; zukai-jev MCP</div>
+</div>
+
+<script>
+  const VERDICT_JA = { ship: "出せる", revise: "要修正", block: "差し戻し", unknown: "判定不能" };
+  const THRESHOLD = 0.7;
+
+  // 同期前に見せる見本。実データが届いたら丸ごと置き換わる。
+  const SAMPLE_STATUS = {
+    status: "idle", stage: null, mode: "stub", model: "jev-latest",
+    run_id: "run_sample", artifact: "artifacts/例.html", iteration: 2,
+    updated_at: new Date(Date.now() - 42000).toISOString(),
+  };
+  const SAMPLE_EVALS = [
+    {
+      seq: 2, iteration: 2, kind: "review", artifact: "artifacts/例.html", mode: "stub",
+      model: "jev-latest", latency_ms: 310, verdict: "revise", overall: 0.74,
+      ts: new Date(Date.now() - 42000).toISOString(), note: "ラベルを具体化",
+      dimensions: [
+        { key: "structure", label: "構造の正確さ", value: 0.82, pass: true, blocking: true },
+        { key: "causality", label: "因果と流れ", value: 0.78, pass: true, blocking: true },
+        { key: "density", label: "情報密度", value: 0.61, pass: false, blocking: false },
+        { key: "hierarchy", label: "視覚階層", value: 0.7, pass: true, blocking: false },
+        { key: "labels", label: "ラベルの具体性", value: 0.85, pass: true, blocking: true },
+        { key: "standalone", label: "自己完結性", value: 0.73, pass: true, blocking: false },
+        { key: "legibility", label: "可読性", value: 0.69, pass: false, blocking: false },
+      ],
+      gates: [
+        { key: "grounded", label: "裏付け", value: 0.88, threshold: 0.8, pass: true, blocking: true },
+        { key: "shippable", label: "公開可否", value: 0.66, threshold: 0.7, pass: false, blocking: false },
+      ],
+      failures: ["density", "legibility", "shippable"],
+    },
+    {
+      seq: 1, iteration: 1, kind: "review", artifact: "artifacts/例.html", mode: "stub",
+      model: "jev-latest", latency_ms: 298, verdict: "block", overall: 0.52,
+      ts: new Date(Date.now() - 300000).toISOString(), note: "初版",
+      dimensions: [], gates: [], failures: ["structure", "labels"],
+    },
+  ];
+
+  let statusDoc = null, evalDocs = null, isSample = true;
+  const $ = (id) => document.getElementById(id);
+
+  function setBanner(html) {
+    const el = $("banner");
+    if (!html) { el.hidden = true; return; }
+    el.innerHTML = html;
+    el.hidden = false;
+  }
+
+  function ago(iso) {
+    if (!iso) return "—";
+    const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+    if (s < 60) return s + "秒前";
+    if (s < 3600) return Math.floor(s / 60) + "分前";
+    if (s < 86400) return Math.floor(s / 3600) + "時間前";
+    return Math.floor(s / 86400) + "日前";
+  }
+
+  function renderStatus(st, latest) {
+    const running = st.status === "running";
+    $("status").dataset.live = st.status || "idle";
+    $("statusText").textContent = running ? "Jev 検査中" : st.status === "error" ? "エラー停止" : "待機中";
+    $("stage").textContent = running && st.stage ? st.stage : st.status === "error" ? (st.last_error || "") : "";
+    const mode = st.mode || latest?.mode || "stub";
+    const badge = $("modeBadge");
+    badge.textContent = mode;
+    badge.className = "badge " + (mode === "live" ? "live" : "stub");
+    $("mAgo").textContent = ago(st.updated_at || latest?.ts);
+    $("mIter").textContent = st.iteration ? "#" + st.iteration : "—";
+    $("mLatency").textContent = latest?.latency_ms != null ? latest.latency_ms + "ms" : "—";
+    $("mModel").textContent = st.model || latest?.model || "—";
+  }
+
+  function renderLatest(ev) {
+    if (!ev) return;
+    $("lArtifact").textContent = ev.artifact + (ev.note ? " — " + ev.note : "");
+    const v = $("lVerdict");
+    v.dataset.v = ev.verdict || "unknown";
+    v.textContent = VERDICT_JA[ev.verdict] || ev.verdict || "—";
+    $("lOverall").textContent = ev.overall != null ? ev.overall.toFixed(2) : "—";
+
+    const rows = (ev.dimensions || []).map((d) => {
+      const pct = d.value == null ? 0 : Math.round(d.value * 100);
+      return `<div class="dim" data-pass="${d.pass === null || d.pass === undefined ? "null" : d.pass}">
+        <span class="dim-label">${d.label}${d.blocking ? ' <span class="block-mark">*</span>' : ""}</span>
+        <span class="track"><span class="fill" style="width:${pct}%"></span><span class="tick" style="left:${THRESHOLD * 100}%"></span></span>
+        <span class="dim-val">${d.value == null ? "—" : d.value.toFixed(2)}</span>
+      </div>`;
+    });
+    $("lDims").innerHTML = rows.join("");
+
+    const gates = ev.gates || [];
+    $("lGateNote").innerHTML = gates.length
+      ? gates
+          .map((g) => `<span class="g">${g.label} <b>${g.value == null ? "—" : g.value.toFixed(2)}</b> / 必要 ${g.threshold}${g.pass === false ? ' <span class="miss">未達</span>' : ""}</span>`)
+          .join("") + '<span class="legend">* は落ちると差し戻しになる必須項目</span>'
+      : "";
+  }
+
+  function renderTrend(evals) {
+    const pts = evals
+      .filter((e) => typeof e.overall === "number")
+      .sort((a, b) => a.seq - b.seq)
+      .map((e) => ({ x: e.iteration || e.seq, y: e.overall }));
+    if (pts.length < 2) { $("trendCard").hidden = true; return; }
+    $("trendCard").hidden = false;
+    const W = 320, H = 60, padL = 22, padR = 8;
+    const span = pts.length - 1;
+    const px = (i) => padL + (i / span) * (W - padL - padR);
+    const py = (y) => H - y * H;
+    const d = pts.map((p, i) => `${i ? "L" : "M"}${px(i).toFixed(1)},${py(p.y).toFixed(1)}`).join(" ");
+    const dots = pts
+      .map((p, i) => `<circle class="${i === pts.length - 1 ? "pt-last" : "pt"}" cx="${px(i).toFixed(1)}" cy="${py(p.y).toFixed(1)}" r="${i === pts.length - 1 ? 4 : 2.5}"/>`)
+      .join("");
+    const labels = pts.map((p, i) => `<text x="${px(i).toFixed(1)}" y="${H + 12}" text-anchor="middle">#${p.x}</text>`).join("");
+    $("trend").innerHTML = `<svg viewBox="0 -6 ${W} ${H + 22}" role="img" aria-label="反復ごとの総合スコア推移">
+      <line class="grid" x1="${padL}" y1="${py(0)}" x2="${W - padR}" y2="${py(0)}"/>
+      <line class="thresh" x1="${padL}" y1="${py(THRESHOLD)}" x2="${W - padR}" y2="${py(THRESHOLD)}"/>
+      <text x="0" y="${py(THRESHOLD) + 3}">${THRESHOLD.toFixed(1)}</text>
+      <text x="0" y="${py(1) + 6}">1.0</text>
+      <path class="line" d="${d}"/>${dots}${labels}
+    </svg>`;
+  }
+
+  function renderLog(evals) {
+    $("log").innerHTML = evals
+      .map((e) => `<li>
+        <span class="it">#${e.iteration ?? "-"}</span>
+        <span class="what">${e.kind === "gate" ? "ゲート" : "レビュー"}${e.note ? ` <em>${e.note}</em>` : ""}<br><em>${ago(e.ts)}${e.overall != null ? " · 総合 " + e.overall.toFixed(2) : ""}${e.failures?.length ? " · 落ち " + e.failures.length : ""}</em></span>
+        <span class="v" data-v="${e.verdict || "unknown"}">${VERDICT_JA[e.verdict] || "—"}</span>
+      </li>`)
+      .join("");
+  }
+
+  function paint() {
+    const haveReal = (evalDocs && evalDocs.length) || statusDoc;
+    isSample = !haveReal;
+    const st = haveReal ? statusDoc || {} : SAMPLE_STATUS;
+    const evals = (haveReal ? evalDocs || [] : SAMPLE_EVALS).slice().sort((a, b) => b.seq - a.seq);
+    const latest = evals[0];
+
+    renderStatus(st, latest);
+    renderLatest(latest);
+    renderTrend(evals);
+    renderLog(evals);
+
+    if (isSample) {
+      setBanner('<b>サンプル表示</b> — まだ同期データがありません。Claude 側で <code>jev_feed</code> の結果をこのページの DB に書き込むと、実際の判定に入れ替わります。');
+    } else if ((st.mode || latest?.mode) === "stub") {
+      setBanner('<b>STUB モード</b> — Jev の APIキーが未設定です。下のスコアは決定論的なダミーで、品質判断には使えません。');
+    } else {
+      setBanner(null);
+    }
+  }
+
+  paint();
+  setInterval(() => {
+    const st = isSample ? SAMPLE_STATUS : statusDoc || {};
+    const evals = isSample ? SAMPLE_EVALS : evalDocs || [];
+    $("mAgo").textContent = ago(st.updated_at || evals[0]?.ts);
+  }, 1000);
+
+  (async () => {
+    const db = await window.claude?.use?.("db");
+    if (!db) {
+      $("foot").textContent = "データ接続なし — サンプル表示のみ";
+      return;
+    }
+    const onErr = (e) => { $("foot").textContent = "同期エラー: " + e.code; };
+    db.doc("status/current").onSnapshot((snap) => {
+      statusDoc = snap.exists ? snap.data() : null;
+      paint();
+    }, onErr);
+    db.collection("evals").orderBy("seq", "desc").limit(50).onSnapshot((snap) => {
+      evalDocs = snap.docs.map((d) => d.data());
+      paint();
+    }, onErr);
+  })();
+</script>

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "zukai-jev": {
+      "command": "node",
+      "args": ["mcp/server.js"],
+      "env": {
+        "TYPESAFE_API_KEY": "${TYPESAFE_API_KEY:-}",
+        "JEV_MODEL": "${JEV_MODEL:-jev-latest}"
+      }
+    }
+  }
+}
