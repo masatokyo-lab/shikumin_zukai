@@ -1,21 +1,23 @@
 {
   "name": "shikumin-zukai",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "仕組み図解アーティファクトを Jev (TypeSafe AI System One) で品質検査しながらアジャイルに生成する環境",
+  "description": "仕組み図解アーティファクトを Jev の欠陥ルーブリックで検査しながらアジャイルに生成する環境",
   "bin": {
     "zukai-jev-mcp": "mcp/server.js"
   },
   "scripts": {
     "mcp": "node mcp/server.js",
-    "check": "node mcp/selftest.js"
+    "check": "node mcp/selftest.js",
+    "probe": "node mcp/probe.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "ai": "^7.0.107",
     "zod": "^4.6.5"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.12"
   }
 }

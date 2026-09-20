@@ -47,10 +47,10 @@
 
 <div class="wrap">
   <h1>図解ができるまで</h1>
-  <p class="lede">書いて終わりにせず、毎周 Jev に採点させ、落ちた項目だけを直す。その一周がどう回るか。</p>
+  <p class="lede">書いて終わりにせず、毎周 Jev に欠陥を検査させ、FAIL した群だけを直す。その一周がどう回るか。</p>
 
   <figure>
-    <svg viewBox="0 0 380 800" role="img" aria-label="依頼から図解の公開までの流れ。Claude が図解を書き、zukai-jev MCP 経由で Jev が7項目を採点し、落ちれば修正して戻り、通れば公開する。判定は毎周記録され、パネルに同期されてスマホから見える。">
+    <svg viewBox="0 0 380 800" role="img" aria-label="依頼から図解の公開までの流れ。Claude が図解を書き、zukai-jev MCP 経由で Jev が8項目の欠陥を検査し、群単位でFAILすれば修正して戻り、欠陥ゼロなら人間が s7 を確認して公開する。判定は毎周記録され、パネルに同期されてスマホから見える。">
       <defs>
         <marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
           <path class="head" d="M0,0 L8,4 L0,8 z"/>
@@ -82,29 +82,29 @@
       <path class="arrow" d="M190,242 L190,276" marker-end="url(#ah)"/>
 
       <rect class="box-key" x="70" y="280" width="240" height="64" rx="6"/>
-      <text class="t t-strong" x="190" y="301" text-anchor="middle">Jev が 7 項目を 0〜1 で採点</text>
-      <text class="t" x="190" y="318" text-anchor="middle">構造・因果・密度・階層・ラベル</text>
-      <text class="t" x="190" y="334" text-anchor="middle">自己完結性・可読性 ＋ 裏付けゲート</text>
+      <text class="t t-strong" x="190" y="299" text-anchor="middle">Jev が 8 項目の欠陥確率を返す</text>
+      <text class="t" x="190" y="316" text-anchor="middle">構造・因果・密度・階層・ラベル</text>
+      <text class="t" x="190" y="332" text-anchor="middle">自己完結性・可読性・裏付け（5 群）</text>
 
       <path class="arrow" d="M190,344 L190,378" marker-end="url(#ah)"/>
 
       <rect class="box" x="70" y="382" width="240" height="50" rx="6"/>
       <text class="t t-strong" x="190" y="404" text-anchor="middle">判定</text>
-      <text class="t-sm" x="190" y="420" text-anchor="middle">必須項目が 0.7 未満なら差し戻し</text>
+      <text class="t-sm" x="190" y="420" text-anchor="middle">群が FAIL したら差し戻し</text>
 
       <path class="arrow-back" d="M130,432 L130,452 L128,452" marker-end="url(#ahb)"/>
       <path class="arrow" d="M250,432 L250,452 L252,452" marker-end="url(#ah)"/>
 
       <rect class="box-back" x="18" y="456" width="150" height="54" rx="6"/>
-      <text class="t" x="93" y="477" text-anchor="middle">落ちた項目だけ直す</text>
-      <text class="t-sm" x="93" y="494" text-anchor="middle">3 周で通らねば中止</text>
+      <text class="t" x="93" y="477" text-anchor="middle">欠陥の出た項目を直す</text>
+      <text class="t-sm" x="93" y="494" text-anchor="middle">3 周・停滞・振動で中止</text>
 
       <rect class="box-out" x="212" y="456" width="150" height="54" rx="6"/>
-      <text class="t" x="287" y="477" text-anchor="middle">そのまま公開</text>
+      <text class="t" x="287" y="477" text-anchor="middle">人間が s7 を確認</text>
       <text class="t-sm" x="287" y="494" text-anchor="middle">verdict: ship</text>
 
       <path class="arrow-back" d="M18,483 L8,483 L8,129 L66,129" marker-end="url(#ahb)"/>
-      <text class="edge-label" x="22" y="300" transform="rotate(-90 22 300)" text-anchor="middle">書き直して再採点</text>
+      <text class="edge-label" x="22" y="300" transform="rotate(-90 22 300)" text-anchor="middle">書き直して再検査</text>
 
       <path class="arrow-sync" d="M310,407 L346,407 L346,585 L314,585" marker-end="url(#ahs)"/>
       <text class="edge-label" x="360" y="500" transform="rotate(-90 360 500)" text-anchor="middle">毎周</text>

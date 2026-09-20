@@ -206,7 +206,7 @@
     <div class="artifact-name" id="lArtifact">—</div>
     <div class="verdict-row">
       <span class="verdict" id="lVerdict" data-v="unknown">—</span>
-      <span class="overall"><b id="lOverall">—</b><span>総合 / 1.00</span></span>
+      <span class="overall"><b id="lOverall">—</b><span>欠陥なし率 / 1.00</span></span>
     </div>
     <div class="dims" id="lDims"></div>
     <div class="gate-note" id="lGateNote"></div>
@@ -238,28 +238,39 @@
   const SAMPLE_EVALS = [
     {
       seq: 2, iteration: 2, kind: "review", artifact: "artifacts/例.html", mode: "stub",
-      model: "jev-latest", latency_ms: 310, verdict: "revise", overall: 0.74,
+      model: "typesafe-ai/jev", latency_ms: 310, verdict: "revise",
+      polarity: "defect", overall: 0.75, clean_ratio: 0.75,
       ts: new Date(Date.now() - 42000).toISOString(), note: "ラベルを具体化",
-      dimensions: [
-        { key: "structure", label: "構造の正確さ", value: 0.82, pass: true, blocking: true },
-        { key: "causality", label: "因果と流れ", value: 0.78, pass: true, blocking: true },
-        { key: "density", label: "情報密度", value: 0.61, pass: false, blocking: false },
-        { key: "hierarchy", label: "視覚階層", value: 0.7, pass: true, blocking: false },
-        { key: "labels", label: "ラベルの具体性", value: 0.85, pass: true, blocking: true },
-        { key: "standalone", label: "自己完結性", value: 0.73, pass: true, blocking: false },
-        { key: "legibility", label: "可読性", value: 0.69, pass: false, blocking: false },
+      items: [
+        { key: "standalone", label: "自己完結性", group: "g1_traceability", probability: 0.18, threshold: 0.7, defect: false, critical: false },
+        { key: "labels", label: "ラベルの一般論語", group: "g2_figure_labeling", probability: 0.15, threshold: 0.7, defect: false, critical: false },
+        { key: "legibility", label: "可読性の不足", group: "g2_figure_labeling", probability: 0.81, threshold: 0.7, defect: true, critical: false },
+        { key: "structure", label: "構造の不一致", group: "g3_text_figure_alignment", probability: 0.22, threshold: 0.5, defect: false, critical: true },
+        { key: "causality", label: "因果の曖昧さ", group: "g3_text_figure_alignment", probability: 0.31, threshold: 0.7, defect: false, critical: false },
+        { key: "density", label: "情報密度の破綻", group: "g4_granularity_flow", probability: 0.77, threshold: 0.7, defect: true, critical: false },
+        { key: "hierarchy", label: "視覚階層の不整合", group: "g4_granularity_flow", probability: 0.24, threshold: 0.7, defect: false, critical: false },
+        { key: "grounded", label: "裏付けのない断定", group: "g5_epistemic", probability: 0.12, threshold: 0.5, defect: false, critical: true },
       ],
-      gates: [
-        { key: "grounded", label: "裏付け", value: 0.88, threshold: 0.8, pass: true, blocking: true },
-        { key: "shippable", label: "公開可否", value: 0.66, threshold: 0.7, pass: false, blocking: false },
+      groups: [
+        { key: "g1_traceability", label: "トレーサビリティ", size: 1, reachable: false, defects: [], critical_defects: [], fail: false },
+        { key: "g2_figure_labeling", label: "図のラベリング", size: 2, reachable: true, defects: ["legibility"], critical_defects: [], fail: false },
+        { key: "g3_text_figure_alignment", label: "本文と図の整合", size: 2, reachable: true, defects: [], critical_defects: [], fail: false },
+        { key: "g4_granularity_flow", label: "粒度と流れ", size: 2, reachable: true, defects: ["density"], critical_defects: [], fail: false },
+        { key: "g5_epistemic", label: "認識の妥当性", size: 1, reachable: true, defects: [], critical_defects: [], fail: false },
       ],
-      failures: ["density", "legibility", "shippable"],
+      defects: ["legibility", "density"],
+      failed_groups: [],
+      missing_answers: [],
+      human_review: { required: true, label: "一次経験の裏打ち", level: 3.4, threshold: 4, meets_threshold: false },
     },
     {
       seq: 1, iteration: 1, kind: "review", artifact: "artifacts/例.html", mode: "stub",
-      model: "jev-latest", latency_ms: 298, verdict: "block", overall: 0.52,
+      model: "typesafe-ai/jev", latency_ms: 298, verdict: "block",
+      polarity: "defect", overall: 0.5, clean_ratio: 0.5,
       ts: new Date(Date.now() - 300000).toISOString(), note: "初版",
-      dimensions: [], gates: [], failures: ["structure", "labels"],
+      items: [], groups: [], defects: ["structure", "labels", "density", "legibility"],
+      failed_groups: ["g3_text_figure_alignment", "g2_figure_labeling"], missing_answers: [],
+      human_review: { required: true, label: "一次経験の裏打ち", level: 2.1, threshold: 4, meets_threshold: false },
     },
   ];
 
@@ -303,31 +314,55 @@
     const v = $("lVerdict");
     v.dataset.v = ev.verdict || "unknown";
     v.textContent = VERDICT_JA[ev.verdict] || ev.verdict || "—";
-    $("lOverall").textContent = ev.overall != null ? ev.overall.toFixed(2) : "—";
+    const clean = ev.clean_ratio != null ? ev.clean_ratio : ev.overall;
+    $("lOverall").textContent = clean != null ? clean.toFixed(2) : "—";
 
-    const rows = (ev.dimensions || []).map((d) => {
-      const pct = d.value == null ? 0 : Math.round(d.value * 100);
-      return `<div class="dim" data-pass="${d.pass === null || d.pass === undefined ? "null" : d.pass}">
-        <span class="dim-label">${d.label}${d.blocking ? ' <span class="block-mark">*</span>' : ""}</span>
-        <span class="track"><span class="fill" style="width:${pct}%"></span><span class="tick" style="left:${THRESHOLD * 100}%"></span></span>
-        <span class="dim-val">${d.value == null ? "—" : d.value.toFixed(2)}</span>
+    // 極性は defect。probability は「欠陥が存在する確率」で、棒が伸びるほど悪い。
+    const failed = new Set(ev.failed_groups || []);
+    const items = ev.items || [];
+    $("lDims").innerHTML = items
+      .map((d) => {
+        const p = d.probability;
+        const pct = p == null ? 0 : Math.round(p * 100);
+        const th = d.threshold != null ? d.threshold : THRESHOLD;
+        const clean = d.defect === false;
+        return `<div class="dim" data-pass="${d.defect === null || d.defect === undefined ? "null" : clean}">
+        <span class="dim-label">${d.label}${failed.has(d.group) ? ' <span class="block-mark">*</span>' : ""}</span>
+        <span class="track"><span class="fill" style="width:${pct}%"></span><span class="tick" style="left:${th * 100}%"></span></span>
+        <span class="dim-val">${p == null ? "—" : p.toFixed(2)}</span>
       </div>`;
-    });
-    $("lDims").innerHTML = rows.join("");
+      })
+      .join("");
 
-    const gates = ev.gates || [];
-    $("lGateNote").innerHTML = gates.length
-      ? gates
-          .map((g) => `<span class="g">${g.label} <b>${g.value == null ? "—" : g.value.toFixed(2)}</b> / 必要 ${g.threshold}${g.pass === false ? ' <span class="miss">未達</span>' : ""}</span>`)
-          .join("") + '<span class="legend">* は落ちると差し戻しになる必須項目</span>'
-      : "";
+    const notes = [];
+    for (const g of ev.groups || []) {
+      const state = g.fail ? '<span class="miss">FAIL</span>' : `${g.defects.length}/${g.size}`;
+      notes.push(`<span class="g">${g.label} <b>${state}</b>${g.reachable === false ? " <em>(判定不能な群)</em>" : ""}</span>`);
+    }
+    const hr = ev.human_review;
+    if (hr) {
+      notes.push(
+        `<span class="g">${hr.label || "s7"} <b>${hr.level == null ? "—" : "水準 " + hr.level}</b> / 必要 ${hr.threshold}` +
+          `${hr.meets_threshold === false ? ' <span class="miss">未達</span>' : ""} <em>人間確認が必要</em></span>`
+      );
+    }
+    if ((ev.missing_answers || []).length) {
+      notes.push(`<span class="g"><span class="miss">回答欠損 ${ev.missing_answers.length} 件</span> <em>判定不能。人間に戻すこと</em></span>`);
+    }
+    if (notes.length && (ev.failed_groups || []).length) {
+      notes.push('<span class="legend">* は群がFAILしている項目。棒が長いほど欠陥の確率が高い</span>');
+    } else if (notes.length) {
+      notes.push('<span class="legend">棒が長いほど欠陥の確率が高い</span>');
+    }
+    $("lGateNote").innerHTML = notes.join("");
   }
 
   function renderTrend(evals) {
     const pts = evals
-      .filter((e) => typeof e.overall === "number")
+      .map((e) => ({ ...e, _y: e.clean_ratio != null ? e.clean_ratio : e.overall }))
+      .filter((e) => typeof e._y === "number")
       .sort((a, b) => a.seq - b.seq)
-      .map((e) => ({ x: e.iteration || e.seq, y: e.overall }));
+      .map((e) => ({ x: e.iteration || e.seq, y: e._y }));
     if (pts.length < 2) { $("trendCard").hidden = true; return; }
     $("trendCard").hidden = false;
     const W = 320, H = 60, padL = 22, padR = 8;
@@ -339,7 +374,7 @@
       .map((p, i) => `<circle class="${i === pts.length - 1 ? "pt-last" : "pt"}" cx="${px(i).toFixed(1)}" cy="${py(p.y).toFixed(1)}" r="${i === pts.length - 1 ? 4 : 2.5}"/>`)
       .join("");
     const labels = pts.map((p, i) => `<text x="${px(i).toFixed(1)}" y="${H + 12}" text-anchor="middle">#${p.x}</text>`).join("");
-    $("trend").innerHTML = `<svg viewBox="0 -6 ${W} ${H + 22}" role="img" aria-label="反復ごとの総合スコア推移">
+    $("trend").innerHTML = `<svg viewBox="0 -6 ${W} ${H + 22}" role="img" aria-label="反復ごとの欠陥なし率の推移">
       <line class="grid" x1="${padL}" y1="${py(0)}" x2="${W - padR}" y2="${py(0)}"/>
       <line class="thresh" x1="${padL}" y1="${py(THRESHOLD)}" x2="${W - padR}" y2="${py(THRESHOLD)}"/>
       <text x="0" y="${py(THRESHOLD) + 3}">${THRESHOLD.toFixed(1)}</text>
@@ -352,7 +387,7 @@
     $("log").innerHTML = evals
       .map((e) => `<li>
         <span class="it">#${e.iteration ?? "-"}</span>
-        <span class="what">${e.kind === "gate" ? "ゲート" : "レビュー"}${e.note ? ` <em>${e.note}</em>` : ""}<br><em>${ago(e.ts)}${e.overall != null ? " · 総合 " + e.overall.toFixed(2) : ""}${e.failures?.length ? " · 落ち " + e.failures.length : ""}</em></span>
+        <span class="what">${"検査"}${e.note ? ` <em>${e.note}</em>` : ""}<br><em>${ago(e.ts)}${(e.clean_ratio ?? e.overall) != null ? " · 欠陥なし率 " + (e.clean_ratio ?? e.overall).toFixed(2) : ""}${(e.defects ?? e.failures)?.length ? " · 欠陥 " + (e.defects ?? e.failures).length : ""}</em></span>
         <span class="v" data-v="${e.verdict || "unknown"}">${VERDICT_JA[e.verdict] || "—"}</span>
       </li>`)
       .join("");

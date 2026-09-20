@@ -1,10 +1,16 @@
 #!/usr/bin/env node
-// zukai-jev — 仕組み図解アーティファクトを Jev (TypeSafe AI System One) で検査する MCP サーバ。
+// zukai-jev — 仕組み図解アーティファクトを Jev で検査する MCP サーバ。
+// 仕様は docs/HANDOFF-jev-gate.md。
 //
 // env:
-//   TYPESAFE_API_KEY / JEV_API_KEY   Jev のキー。無い場合は stub モードで動く（判定は偽物と明示される）
-//   JEV_BASE_URL, JEV_MODEL          エンドポイント / モデルの上書き
-//   ZUKAI_REPO_ROOT                  リポジトリルート（既定: cwd）
+//   AI_GATEWAY_API_KEY   Vercel AI Gateway のキー。.env に置く（HANDOFF 6章）。
+//                        無い場合は stub モードで動く（判定は偽物と明示される）
+//   JEV_MODEL            モデルの上書き（既定 typesafe-ai/jev）
+//   JEV_TIMEOUT_MS       呼び出しタイムアウト（既定 20000）
+//   ZUKAI_REPO_ROOT      リポジトリルート（既定: cwd）
+//
+// このサーバは「公開可否」を判定しない。HANDOFF 禁止事項 #4:
+// 誤判定コストが非対称であり、かつ state を外部APIに送る構造と矛盾する。
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -19,6 +25,10 @@ import * as store from "./store.js";
 const REPO_ROOT = resolve(process.env.ZUKAI_REPO_ROOT || process.cwd());
 const MAX_CONTENT = Number(process.env.ZUKAI_MAX_CONTENT || 60000);
 
+const CALIBRATION_WARNING =
+  "閾値 0.70 / 0.50 / group_fail_at=2 は較正前の暫定値。較正が済むまで、この判定を品質の根拠にしないこと（HANDOFF 禁止事項 #6）。";
+const STUB_WARNING = "stub モードの結果。スコアは決定論的なダミーで、品質判断には使えない。";
+
 function readArtifact(artifactPath, inlineContent) {
   if (inlineContent) {
     return { path: artifactPath || "(inline)", content: inlineContent, bytes: inlineContent.length };
@@ -31,6 +41,7 @@ function readArtifact(artifactPath, inlineContent) {
   return { path: rel, content: readFileSync(abs, "utf8"), bytes: statSync(abs).size };
 }
 
+// 図は SVG ソースをテキストとして state に含める（HANDOFF 3.4: 画像は評価できない）。
 function buildState({ task, sourceMaterial, artifact, note }) {
   const truncated = artifact.content.length > MAX_CONTENT;
   const body = truncated ? artifact.content.slice(0, MAX_CONTENT) : artifact.content;
@@ -59,35 +70,67 @@ function resolveRun(artifactPath, explicitRunId) {
 }
 
 const ok = (obj) => ({ content: [{ type: "text", text: JSON.stringify(obj, null, 2) }] });
+// HANDOFF 禁止事項 #5: 判定不能を PASS に倒さない。必ず isError で返す。
 const fail = (e) => ({
   isError: true,
   content: [{ type: "text", text: `zukai-jev error: ${e?.message || String(e)}` }],
 });
 
-const server = new McpServer({ name: "zukai-jev", version: "0.1.0" });
+const server = new McpServer({ name: "zukai-jev", version: "0.2.0" });
 
-// ── ping: live なのか stub なのかを最初に確かめる ──────────────────────────
+// ── ping: live なのか stub なのか、どの基準で測るのかを最初に確かめる ──────
 server.registerTool(
   "jev_ping",
   {
     title: "Jev 接続確認",
     description:
-      "Jev への接続モード（live / stub）、モデル、エンドポイント、APIキーの有無、現在のルーブリックを返す。stub の場合その評価は偽物なので、必ず最初に確認すること。",
+      "Jev への接続モード（live / stub）、モデル、極性、閾値、群構成を返す。stub の場合その評価は偽物なので、必ず最初に確認すること。",
     inputSchema: {},
   },
   async () => {
-    const rubric = loadRubric(REPO_ROOT);
+    let rubric;
+    try {
+      rubric = loadRubric(REPO_ROOT);
+    } catch (e) {
+      return fail(e);
+    }
+    const groups = rubric.groups.map((g) => {
+      const members = rubric.questions.filter((q) => q.group === g.key);
+      return {
+        key: g.key,
+        label: g.label,
+        questions: members.map((q) => q.key),
+        critical: members.filter((q) => q.critical).map((q) => q.key),
+        // 項目が1つで critical でもない群は group_fail_at に到達できず、永久に FAIL しない。
+        reachable:
+          members.some((q) => q.critical) || members.length >= rubric.thresholds.group_fail_at,
+      };
+    });
+    const unreachable = groups.filter((g) => !g.reachable).map((g) => g.key);
     return ok({
       ...describeClient(),
       repo_root: REPO_ROOT,
       rubric: {
         profile: rubric.profile,
         source: rubric.source || "built-in",
-        dimensions: rubric.dimensions.map((d) => d.key),
-        gates: rubric.gates.map((g) => g.key),
-        blocking: rubric.thresholds.blocking,
+        polarity: rubric.polarity,
+        polarity_note:
+          "probability は「欠陥が存在する確率」。高いほど悪い。閾値以上で欠陥ありと判定する。",
+        thresholds: rubric.thresholds,
+        groups,
+        scored: {
+          key: rubric.scored.key,
+          threshold: rubric.scored.threshold,
+          human_review_required: rubric.scored.human_review_required,
+        },
       },
-      warning: MODE === "stub" ? "APIキーが無いため stub モード。スコアは決定論的なダミーで、品質判断には使えない。" : null,
+      warnings: [
+        MODE === "stub" ? `APIキー（AI_GATEWAY_API_KEY）が無いため stub モード。${STUB_WARNING}` : null,
+        rubric.thresholds.calibrated ? null : CALIBRATION_WARNING,
+        unreachable.length
+          ? `構造上 FAIL しえない群がある: ${unreachable.join(", ")}。項目が1つで critical でもないため group_fail_at に到達しない。次ラウンドのルーブリック再設計で解消すること。`
+          : null,
+      ].filter(Boolean),
     });
   }
 );
@@ -98,12 +141,19 @@ server.registerTool(
   {
     title: "図解をレビューする",
     description:
-      "図解アーティファクトをルーブリック全項目（構造・因果・密度・階層・ラベル・自己完結性・可読性 + 裏付け/公開可否ゲート）で評価し、判定と修正項目リストを返す。結果は .jev/runs.jsonl に記録される。",
+      "図解アーティファクトを欠陥ルーブリック全項目で検査し、群単位の判定と修正項目リストを返す。" +
+      "群は トレーサビリティ / 図のラベリング / 本文と図の整合 / 粒度と流れ / 認識の妥当性 の5つ。" +
+      "critical 項目は単独で群FAIL、それ以外は群内2件以上で群FAIL。" +
+      "s7_originality（一次経験の裏打ち）は判定に算入せず、人間確認の対象として別枠で返る。" +
+      "結果は .jev/runs.jsonl に記録される。",
     inputSchema: {
       task: z.string().describe("この図解が説明すべき仕組み。依頼内容をそのまま。"),
       artifact_path: z.string().optional().describe("リポジトリ相対のアーティファクトパス。"),
       content: z.string().optional().describe("パスの代わりに中身を直接渡す場合。"),
-      source_material: z.string().optional().describe("図解の元になった資料。裏付け判定に使う。"),
+      source_material: z
+        .string()
+        .optional()
+        .describe("図解の元になった資料。裏付け判定（grounded）に使う。省くと効かない。"),
       note: z.string().optional().describe("前回からの変更点。反復の記録に残る。"),
       run_id: z.string().optional().describe("反復をまとめる ID。省略時は自動。"),
     },
@@ -140,13 +190,20 @@ server.registerTool(
         mode: res.mode,
         model: res.model,
         latency_ms: res.latency_ms,
+        usage: res.usage,
+        provider_warnings: res.provider_warnings,
+        rounding: res.rounding,
+        polarity: result.polarity,
         verdict: result.verdict,
         overall: result.overall,
-        dimensions: result.dimensions,
-        gates: result.gates,
-        failures: result.failures,
-        blocking_failures: result.blocking_failures,
-        jev_next_action: result.jev_next_action,
+        clean_ratio: result.clean_ratio,
+        items: result.items,
+        groups: result.groups,
+        defects: result.defects,
+        failed_groups: result.failed_groups,
+        missing_answers: result.missing_answers,
+        human_review: result.human_review,
+        calibrated: result.calibrated,
       });
       store.setState(REPO_ROOT, {
         status: "idle",
@@ -156,6 +213,7 @@ server.registerTool(
         iteration,
         last_verdict: result.verdict,
         last_overall: result.overall,
+        last_failed_groups: result.failed_groups,
         last_seq: record.seq,
       });
       return ok({
@@ -163,89 +221,31 @@ server.registerTool(
         run_id: runId,
         iteration,
         mode: res.mode,
+        polarity: result.polarity,
         verdict: result.verdict,
-        overall: result.overall,
+        clean_ratio: result.clean_ratio,
         latency_ms: res.latency_ms,
-        dimensions: result.dimensions,
-        gates: result.gates,
+        groups: result.groups,
+        items: result.items,
+        failed_groups: result.failed_groups,
+        // 1件でもあれば verdict は unknown。無視すると群の欠陥数が実際より少なく数えられる。
+        missing_answers: result.missing_answers,
+        unreachable_groups: result.unreachable_groups,
+        human_review: result.human_review,
         fixes,
-        jev_next_action: result.jev_next_action,
-        stub_warning: res.mode === "stub" ? "stub モードの結果。品質判断には使えない。" : undefined,
-      });
-    } catch (e) {
-      store.setState(REPO_ROOT, { status: "error", stage: null, last_error: String(e?.message || e) });
-      return fail(e);
-    }
-  }
-);
-
-// ── gate: 公開してよいかだけを安く判定 ─────────────────────────────────────
-server.registerTool(
-  "jev_gate",
-  {
-    title: "公開ゲート",
-    description:
-      "ゲート項目（裏付け・公開可否）と次アクションだけを判定する軽量版。反復の途中で「まだ直すか、出すか」を決めるのに使う。",
-    inputSchema: {
-      task: z.string().describe("この図解が説明すべき仕組み。"),
-      artifact_path: z.string().optional(),
-      content: z.string().optional(),
-      source_material: z.string().optional(),
-      run_id: z.string().optional(),
-    },
-  },
-  async ({ task, artifact_path, content, source_material, run_id }) => {
-    let artifact;
-    try {
-      artifact = readArtifact(artifact_path, content);
-    } catch (e) {
-      return fail(e);
-    }
-    const runId = resolveRun(artifact.path, run_id);
-    store.setState(REPO_ROOT, {
-      status: "running",
-      stage: "jev_gate",
-      run_id: runId,
-      artifact: artifact.path,
-    });
-    try {
-      const rubric = loadRubric(REPO_ROOT);
-      const res = await callJev(
-        buildState({ task, sourceMaterial: source_material, artifact }),
-        buildQuestions(rubric, { gateOnly: true })
-      );
-      const result = interpret(res.answers, { ...rubric, dimensions: [] });
-      const record = store.append(REPO_ROOT, {
-        kind: "gate",
-        run_id: runId,
-        iteration: store.nextIteration(REPO_ROOT, runId),
-        artifact: artifact.path,
-        task,
-        mode: res.mode,
-        model: res.model,
-        latency_ms: res.latency_ms,
-        verdict: result.verdict,
-        overall: null,
-        dimensions: [],
-        gates: result.gates,
-        failures: result.failures,
-        blocking_failures: result.blocking_failures,
-        jev_next_action: result.jev_next_action,
-      });
-      store.setState(REPO_ROOT, {
-        status: "idle",
-        stage: null,
-        last_verdict: result.verdict,
-        last_seq: record.seq,
-      });
-      return ok({
-        seq: record.seq,
-        run_id: runId,
-        mode: res.mode,
-        verdict: result.verdict,
-        gates: result.gates,
-        jev_next_action: result.jev_next_action,
-        stub_warning: res.mode === "stub" ? "stub モードの結果。品質判断には使えない。" : undefined,
+        usage: res.usage,
+        rounding: res.rounding,
+        warnings: [
+          res.mode === "stub" ? STUB_WARNING : null,
+          result.calibrated ? null : CALIBRATION_WARNING,
+          result.missing_answers.length
+            ? `回答が欠けている質問がある: ${result.missing_answers.join(", ")}。判定不能として unknown を返した。人間に戻すこと。`
+            : null,
+          // プロバイダの警告を伏せない。設定が無視された等が黙って通ると判定の意味が変わる。
+          ...res.provider_warnings.map(
+            (w) => `Jev プロバイダの警告: ${typeof w === "string" ? w : JSON.stringify(w)}`
+          ),
+        ].filter(Boolean),
       });
     } catch (e) {
       store.setState(REPO_ROOT, { status: "error", stage: null, last_error: String(e?.message || e) });
@@ -260,9 +260,13 @@ server.registerTool(
   {
     title: "任意の型付き判断",
     description:
-      "Jev の素の呼び出し。state と型付き質問マップを渡して一往復で全回答を得る。各質問は { type: 'choice'|'score'|'noul', instructions, criteria }。choice の criteria は {key:説明} のマップ、score は低→高の順序付き文字列配列、noul は criteria 不要。",
+      "Jev の素の呼び出し。state と型付き質問マップを渡して一往復で全回答を得る。" +
+      "各質問は { type: 'boolean'|'score', instructions, criteria? }。" +
+      "boolean は criteria 不要（付けるなら {true,false} の両方。片方だけは I/O 前にエラー）で、" +
+      "返り値は { type: 'boolean', probability } のみ（value フィールドは存在しない）。" +
+      "score は criteria に低→高の順序付き水準説明の配列を渡す。",
     inputSchema: {
-      state: z.string().describe("判断対象の文脈。"),
+      state: z.string().describe("判断対象の文脈。テキストのみ。画像は評価できない。"),
       questions: z.record(z.string(), z.any()).describe("質問名 -> 質問オブジェクトのマップ。"),
     },
   },

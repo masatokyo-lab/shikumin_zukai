@@ -1,93 +1,122 @@
 // 仕組み図解 の品質ルーブリック。
-// リポジトリ直下に jev.rubric.json を置くと丸ごと差し替えられる。
+// 仕様は docs/HANDOFF-jev-gate.md 3章。リポジトリ直下に jev.rubric.json を置くと差し替えられる。
+//
+// 極性は defect。全ての boolean 質問は「欠陥が存在するか」を問い、probability は
+// 欠陥が存在する確率。HANDOFF 3.2: v0.1 は逆の極性（「良いか」）だった。古いコードを
+// 流用する場合は必ず反転すること — loadRubric が polarity を検査して誤流用を止める。
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { normalizeScore } from "./jev.js";
+import { readScoreLevel, readProbability, readScore } from "./jev.js";
 
+// s7_originality の水準。低→高の順。
 const LEVELS = [
-  "破綻: 事実誤認・意味の通らない箇所がある",
-  "要修正: 読んでも仕組みが伝わらない",
-  "許容: 伝わるが粗い",
-  "良好: このまま使える",
-  "秀逸: 手を入れる必要がない",
+  "水準1: 一般に入手できる情報の再構成のみ。一次経験の痕跡がない",
+  "水準2: 経験を語っているが、どの現場・どの制約でも言える内容",
+  "水準3: 具体的な事象に触れているが、判断の理由まで踏み込んでいない",
+  "水準4: 具体的な事象と、そこで何を選び何を捨てたかが書かれている",
+  "水準5: その現場に立った者しか書けない制約・失敗・回避策が書かれている",
+];
+
+// 群。HANDOFF 3.5 の群構成に既存の項目キーを割り当てたもの。
+// 本来の群構成（g1 は 4 問、g2 は 6 問…）とは項目数が合わない。次ラウンドで
+// rubric-article.json / rubric-diagram.json に差し替える前提の暫定形。
+const GROUPS = [
+  { key: "g1_traceability", label: "トレーサビリティ" },
+  { key: "g2_figure_labeling", label: "図のラベリング" },
+  { key: "g3_text_figure_alignment", label: "本文と図の整合" },
+  { key: "g4_granularity_flow", label: "粒度と流れ" },
+  { key: "g5_epistemic", label: "認識の妥当性" },
 ];
 
 export const DEFAULT_RUBRIC = {
   profile: "zukai",
+  polarity: "defect",
   levels: LEVELS,
-  dimensions: [
-    {
-      key: "structure",
-      label: "構造の正確さ",
-      instructions:
-        "この図解の構造（要素の分け方・階層・包含関係）は、説明対象の仕組みを正しく写しているか。",
-    },
-    {
-      key: "causality",
-      label: "因果と流れ",
-      instructions:
-        "矢印・順序・分岐が、何が何を引き起こすのかを曖昧さなく示しているか。向きや起点終点が不明な線がないか。",
-    },
-    {
-      key: "density",
-      label: "情報密度",
-      instructions:
-        "1枚で処理できる情報量か。詰め込みすぎて読めない、または薄すぎて図解の意味がない状態になっていないか。",
-    },
-    {
-      key: "hierarchy",
-      label: "視覚階層",
-      instructions:
-        "最も重要な要素が最初に目に入るか。サイズ・色・配置が重要度の順序と一致しているか。",
-    },
-    {
-      key: "labels",
-      label: "ラベルの具体性",
-      instructions:
-        "ラベルが「最適化」「連携強化」のような一般論語ではなく、具体的な主体・動作・対象で書かれているか。",
-    },
+  groups: GROUPS,
+  // 全て boolean。criteria は付けない。
+  // （HANDOFF 5.1 は「両方揃えるか両方省くか、片方だけはエラー」としているが、
+  //  EvaluationModelV4 の型では true / false が各々 optional。付けないので影響しない。）
+  questions: [
     {
       key: "standalone",
       label: "自己完結性",
+      group: "g1_traceability",
       instructions:
-        "口頭の補足説明なしに、この図だけを見た第三者が仕組みを理解できるか。",
+        "口頭の補足説明なしでは、この図だけを見た第三者が仕組みを理解できない箇所があるか。指示語の指す先が図内で辿れない、前提が図外にある等。",
+    },
+    {
+      key: "labels",
+      label: "ラベルの一般論語",
+      group: "g2_figure_labeling",
+      instructions:
+        "ラベルに「最適化」「連携強化」「効率化」のような一般論語が使われているか。主体・動作・対象のいずれかが特定できないラベルがあるか。",
     },
     {
       key: "legibility",
-      label: "可読性",
+      label: "可読性の不足",
+      group: "g2_figure_labeling",
       instructions:
-        "スマートフォン幅で読めるか。ライトモード・ダークモードの双方でコントラストが確保されているか。文字が小さすぎないか。",
+        "スマートフォン幅で読めない箇所があるか。ライトモード・ダークモードのいずれかでコントラストが不足しているか。文字が小さすぎる箇所があるか。",
     },
-  ],
-  gates: [
+    {
+      key: "structure",
+      label: "構造の不一致",
+      group: "g3_text_figure_alignment",
+      critical: true,
+      instructions:
+        "構造（要素の分け方・階層・包含関係）が説明対象の仕組みを写していない箇所があるか。並列でないものが並列に置かれている、包含関係が逆または欠けている等。",
+    },
+    {
+      key: "causality",
+      label: "因果の曖昧さ",
+      group: "g3_text_figure_alignment",
+      instructions:
+        "矢印・順序・分岐に曖昧さがあるか。向きや起点終点が不明な線、何が何を引き起こすのか読み取れない箇所があるか。",
+    },
+    {
+      key: "density",
+      label: "情報密度の破綻",
+      group: "g4_granularity_flow",
+      instructions:
+        "情報量が1枚で処理できる範囲を超えているか。または薄すぎて図解にした意味がない状態か。",
+    },
+    {
+      key: "hierarchy",
+      label: "視覚階層の不整合",
+      group: "g4_granularity_flow",
+      instructions:
+        "サイズ・色・配置が重要度の順序と一致していないか。最も重要な要素より先に目に入る装飾的要素があるか。",
+    },
     {
       key: "grounded",
-      label: "裏付け",
+      label: "裏付けのない断定",
+      group: "g5_epistemic",
+      critical: true,
       instructions:
-        "図解に書かれた主張は、すべて入力資料で裏付けられているか。資料にない断定や数字が混入していないか。",
-      min: 0.8,
-    },
-    {
-      key: "shippable",
-      label: "公開可否",
-      instructions: "この図解は、これ以上直さずに社外に出せる品質か。",
-      min: 0.7,
+        "図解に、入力資料で裏付けられていない断定・具体的数値・製品名が混入しているか。出典の粒度が主張の粒度に対応していない箇所があるか。",
+      // HANDOFF 3.4: これが立っても「出典を確認せよ」という指示であり、
+      // 「事実が間違っている」という判定ではない。真偽検証は Jev の死角。
+      means: "出典を確認せよ（事実の真偽判定ではない。確認作業は人間かウェブ検索が要る）",
     },
   ],
-  decision: {
-    key: "next_action",
-    instructions: "この図解に対して次に取るべき行動はどれか。",
-    criteria: {
-      ship: "このまま公開してよい",
-      revise: "個別の要素を直せば公開できる",
-      restructure: "構成そのものを作り直す必要がある",
-      more_input: "元資料が足りず、判断も改善もできない",
-    },
+  // 唯一の scored 質問。verdict には算入しない。
+  // HANDOFF 禁止事項 #3: s7 の人間確認を外さない。Jev の死角であり、
+  // もっともらしく具体的な記述を生成すれば通過できてしまう。
+  scored: {
+    key: "s7_originality",
+    label: "一次経験の裏打ち",
+    instructions:
+      "この内容は、組み込み・低レイヤの一次経験に裏打ちされているか。一般に入手できる情報の再構成にとどまっていないか。",
+    threshold: 4,
+    human_review_required: true,
   },
+  // HANDOFF 3.3。いずれも較正前の暫定値。0.70 と 0.50 に根拠はない。
   thresholds: {
-    dimension_min: 0.7,
-    blocking: ["structure", "causality", "labels", "grounded"],
+    probability_threshold: 0.7,
+    critical_probability_threshold: 0.5,
+    group_fail_at: 2,
+    calibrated: false,
   },
 };
 
@@ -95,90 +124,147 @@ export function loadRubric(repoRoot) {
   const path = join(repoRoot, "jev.rubric.json");
   if (!existsSync(path)) return DEFAULT_RUBRIC;
   const custom = JSON.parse(readFileSync(path, "utf8"));
+  // 極性の誤流用を止める。v0.1 の「良いか」極性のルーブリックを読み込むと
+  // 判定が全て裏返り、欠陥のある図解が ship になる。
+  if (custom.polarity !== "defect") {
+    throw new Error(
+      'jev.rubric.json の polarity が "defect" ではありません。' +
+        "全ての boolean 質問は「欠陥が存在するか」を問う形でなければなりません（HANDOFF 3.2）。"
+    );
+  }
   return { ...DEFAULT_RUBRIC, ...custom, source: "jev.rubric.json" };
 }
 
-export function buildQuestions(rubric, { gateOnly = false } = {}) {
+export function buildQuestions(rubric) {
   const questions = {};
-  if (!gateOnly) {
-    for (const d of rubric.dimensions) {
-      questions[d.key] = { type: "score", instructions: d.instructions, criteria: rubric.levels };
-    }
+  for (const q of rubric.questions) {
+    questions[q.key] = { type: "boolean", instructions: q.instructions };
   }
-  for (const g of rubric.gates) {
-    questions[g.key] = { type: "noul", instructions: g.instructions };
-  }
-  questions[rubric.decision.key] = {
-    type: "choice",
-    instructions: rubric.decision.instructions,
-    criteria: rubric.decision.criteria,
+  questions[rubric.scored.key] = {
+    type: "score",
+    instructions: rubric.scored.instructions,
+    criteria: rubric.levels,
   };
   return questions;
 }
 
-export function interpret(answers, rubric) {
-  const levelCount = rubric.levels.length;
-  const min = rubric.thresholds.dimension_min;
-  const blocking = new Set(rubric.thresholds.blocking);
+function thresholdFor(question, thresholds) {
+  return question.critical
+    ? thresholds.critical_probability_threshold
+    : thresholds.probability_threshold;
+}
 
-  const dimensions = rubric.dimensions.map((d) => {
-    const value = normalizeScore(answers[d.key]?.score, levelCount);
+export function interpret(answers, rubric) {
+  const t = rubric.thresholds;
+
+  const items = rubric.questions.map((q) => {
+    const probability = readProbability(answers[q.key]);
+    const threshold = thresholdFor(q, t);
     return {
-      key: d.key,
-      label: d.label,
-      value,
-      raw: answers[d.key]?.score ?? null,
-      pass: value === null ? null : value >= min,
-      blocking: blocking.has(d.key),
+      key: q.key,
+      label: q.label,
+      group: q.group,
+      critical: Boolean(q.critical),
+      probability,
+      threshold,
+      // null は「未回答」。欠陥なしと数えない。
+      defect: probability === null ? null : probability >= threshold,
     };
   });
 
-  const gates = rubric.gates.map((g) => {
-    const value = typeof answers[g.key]?.noul === "number" ? answers[g.key].noul : null;
+  // HANDOFF 4章: 答えが欠けると群の欠陥数が実際より少なく数えられ、静かにゲートが緩む。
+  const missing_answers = items.filter((i) => i.defect === null).map((i) => i.key);
+
+  const groups = rubric.groups.map((g) => {
+    const members = items.filter((i) => i.group === g.key);
+    const defects = members.filter((i) => i.defect === true);
+    const criticalDefects = defects.filter((i) => i.critical);
+    // この群が構造上 FAIL しうるか。項目が1つしかなく critical でもない群は
+    // group_fail_at=2 に到達できず、永久に FAIL しない。黙って緩むのを防ぐため露出する。
+    const reachable = members.some((m) => m.critical) || members.length >= t.group_fail_at;
     return {
       key: g.key,
       label: g.label,
-      value,
-      threshold: g.min,
-      pass: value === null ? null : value >= g.min,
-      blocking: blocking.has(g.key),
+      size: members.length,
+      reachable,
+      defects: defects.map((d) => d.key),
+      critical_defects: criticalDefects.map((d) => d.key),
+      // critical は単独で FAIL、それ以外は群内 group_fail_at 件以上で FAIL。
+      fail: criticalDefects.length > 0 || defects.length >= t.group_fail_at,
     };
   });
 
-  const all = [...dimensions, ...gates];
-  const failures = all.filter((x) => x.pass === false);
-  const blockingFailures = failures.filter((x) => x.blocking);
-  const unknown = all.filter((x) => x.pass === null);
+  const unreachable_groups = groups.filter((g) => !g.reachable).map((g) => g.key);
+  const failedGroups = groups.filter((g) => g.fail);
+  const defects = items.filter((i) => i.defect === true);
 
-  const scored = dimensions.filter((d) => typeof d.value === "number");
-  const overall = scored.length
-    ? Number((scored.reduce((s, d) => s + d.value, 0) / scored.length).toFixed(3))
+  // 欠陥が無い質問の割合。品質スコアではない（Jev の一致度は約68%）。
+  // 推移を見るためだけの値で、ゲートには使わない。
+  const answered = items.filter((i) => i.defect !== null);
+  const clean_ratio = answered.length
+    ? Number(((answered.length - defects.length) / answered.length).toFixed(3))
     : null;
 
+  // scored は verdict に算入しない。人間確認の対象として別枠で返す。
+  // score は 0 起点の小数位置。threshold は水準番号（1 起点）で書かれているので level と比べる。
+  const rawScore = readScore(answers[rubric.scored.key]);
+  const scoreRead = readScoreLevel(rawScore, rubric.levels.length);
+  const scoreLevel = scoreRead?.level ?? null;
+  const human_review = {
+    required: true,
+    key: rubric.scored.key,
+    label: rubric.scored.label,
+    raw: rawScore, // 0 起点の小数位置
+    level: scoreLevel, // 1 起点表記。小数のまま（3.6 は水準4に届いていない）
+    level_description:
+      scoreLevel === null
+        ? null
+        : rubric.levels[Math.min(rubric.levels.length - 1, Math.round(scoreLevel) - 1)],
+    threshold: rubric.scored.threshold,
+    meets_threshold: scoreLevel === null ? null : scoreLevel >= rubric.scored.threshold,
+    note:
+      "Jev の出力は参考値。一次経験の有無は state のテキストからは検証できない（HANDOFF 3.4）。" +
+      "人間が確認するまで ship を名乗らないこと（禁止事項 #3）。",
+  };
+
   let verdict;
-  if (unknown.length) verdict = "unknown";
-  else if (blockingFailures.length) verdict = "block";
-  else if (failures.length) verdict = "revise";
+  if (missing_answers.length) verdict = "unknown";
+  else if (failedGroups.length) verdict = "block";
+  else if (defects.length) verdict = "revise";
   else verdict = "ship";
 
   return {
     verdict,
-    overall,
-    dimensions,
-    gates,
-    failures: failures.map((f) => f.key),
-    blocking_failures: blockingFailures.map((f) => f.key),
-    jev_next_action: answers[rubric.decision.key]?.choice ?? null,
-    jev_next_action_confidence: answers[rubric.decision.key]?.confidence ?? null,
+    polarity: "defect",
+    clean_ratio,
+    // ダッシュボード互換。品質スコアではない。
+    overall: clean_ratio,
+    items,
+    groups,
+    defects: defects.map((d) => d.key),
+    failed_groups: failedGroups.map((g) => g.key),
+    missing_answers,
+    unreachable_groups,
+    human_review,
+    calibrated: Boolean(rubric.thresholds.calibrated),
   };
 }
 
 export function fixList(interpreted, rubric) {
-  const byKey = new Map([...rubric.dimensions, ...rubric.gates].map((x) => [x.key, x]));
-  return interpreted.failures.map((key) => ({
-    key,
-    label: byKey.get(key)?.label ?? key,
-    instructions: byKey.get(key)?.instructions ?? "",
-    blocking: rubric.thresholds.blocking.includes(key),
-  }));
+  const byKey = new Map(rubric.questions.map((q) => [q.key, q]));
+  const failed = new Set(interpreted.failed_groups);
+  return interpreted.defects.map((key) => {
+    const q = byKey.get(key);
+    return {
+      key,
+      label: q?.label ?? key,
+      group: q?.group ?? null,
+      critical: Boolean(q?.critical),
+      // 群が FAIL している項目から先に直す。群 FAIL していない欠陥は revise 止まり。
+      blocking: q ? failed.has(q.group) : false,
+      probability: interpreted.items.find((i) => i.key === key)?.probability ?? null,
+      instructions: q?.instructions ?? "",
+      means: q?.means,
+    };
+  });
 }
