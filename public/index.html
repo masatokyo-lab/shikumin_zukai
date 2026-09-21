@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ja"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jev probe</title>
+<style>
+  :root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#e2e2e2;--accent:#1a56db;--code:#f6f6f6}
+  @media (prefers-color-scheme: dark){:root:not([data-theme=light]){--bg:#121212;--fg:#ececec;--muted:#9a9a9a;--line:#2e2e2e;--accent:#7aa2f7;--code:#1c1c1c}}
+  :root[data-theme=dark]{--bg:#121212;--fg:#ececec;--muted:#9a9a9a;--line:#2e2e2e;--accent:#7aa2f7;--code:#1c1c1c}
+  *{box-sizing:border-box}
+  body{margin:0;padding:16px;background:var(--bg);color:var(--fg);
+       font:15px/1.7 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif}
+  main{max-width:640px;margin:0 auto}
+  h1{font-size:20px;margin:8px 0 4px}
+  p.sub{color:var(--muted);font-size:13px;margin:0 0 20px}
+  label{display:block;font-size:13px;color:var(--muted);margin:16px 0 4px}
+  input{width:100%;padding:10px 12px;font-size:16px;border:1px solid var(--line);border-radius:6px;
+        background:var(--bg);color:var(--fg)}
+  a.btn{display:block;text-align:center;margin-top:16px;padding:14px;border-radius:8px;
+        background:var(--accent);color:#fff;text-decoration:none;font-weight:700}
+  ol{padding-left:1.2em}
+  li{margin:6px 0;font-size:14px}
+  code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:13px}
+  .note{border-left:3px solid var(--line);padding:4px 12px;margin:20px 0;color:var(--muted);font-size:13px}
+</style></head><body><main>
+  <h1>Jev probe</h1>
+  <p class="sub">実キーで Jev に1往復し、認証と返り値の形を確かめる。ローカルの <code>npm run probe</code> と同じ検査。</p>
+
+  <label for="t">PROBE_TOKEN（環境変数に設定した場合のみ）</label>
+  <input id="t" type="text" inputmode="text" autocomplete="off" placeholder="未設定なら空のまま">
+  <a class="btn" id="go" href="/api/probe">probe を実行</a>
+
+  <div class="note">1回の実行につき Jev が1往復ぶん課金されます。</div>
+
+  <h2 style="font-size:16px">動かない場合</h2>
+  <ol>
+    <li>Vercel の Project Settings → Environment Variables に <code>AI_GATEWAY_API_KEY</code> があるか</li>
+    <li>足した後に <b>再デプロイ</b>したか（環境変数はデプロイ時に焼き込まれる）</li>
+    <li>AI Gateway にカード登録があるか（無料枠でも必須）</li>
+  </ol>
+
+  <script>
+    const t = document.getElementById("t"), go = document.getElementById("go");
+    try { t.value = localStorage.getItem("probe_token") || ""; } catch {}
+    const sync = () => {
+      const v = t.value.trim();
+      go.href = v ? "/api/probe?token=" + encodeURIComponent(v) : "/api/probe";
+      try { localStorage.setItem("probe_token", v); } catch {}
+    };
+    t.addEventListener("input", sync); sync();
+  </script>
+</main></body></html>

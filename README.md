@@ -44,6 +44,30 @@ npm run probe                           # ← 先にこれ。通るまで次へ�
 
 Vercel AI Gateway は無料枠でもカード登録が必須。認証エラーが出たら、まず `.env` のファイル名を疑うこと。
 
+#### 手元から外へ出られないとき — Vercel で probe を回す
+
+ネットワークの egress 制限で `ai-gateway.vercel.sh` に届かない環境（403 on CONNECT）では、
+手元で `npm run probe` は通らない。このリポジトリを Vercel にデプロイすると、
+Vercel 側から同じ probe を走らせてブラウザで結果を見られる。**検査の中身は CLI と同一**
+（どちらも `mcp/probe-core.js` を呼ぶ）。
+
+1. GitHub からこのリポジトリを Vercel に Import する（Framework Preset は **Other**）。
+2. Project Settings → Environment Variables に `AI_GATEWAY_API_KEY` を入れる。
+   任意で `PROBE_TOKEN` も入れる（後述）。
+3. **再デプロイする。** 環境変数はデプロイ時に焼き込まれるので、足しただけでは反映されない。
+4. `https://<project>.vercel.app/` を開き、「probe を実行」を押す。
+   JSON で欲しければ `/api/probe?format=json`。
+
+`PROBE_TOKEN` を設定しない限り、**その URL を知っている全員が Jev を1往復ぶん課金できる**。
+疎通が取れたら必ず設定すること（未設定のときはページ上にも警告を出している）。
+アクセスは `/api/probe?token=...` になる。
+
+| 変数 | 必須 | 用途 |
+|---|---|---|
+| `AI_GATEWAY_API_KEY` | ○ | 無いと `stub` のままで probe は 502 を返す |
+| `PROBE_TOKEN` | 推奨 | `/api/probe` の実行に `?token=` を要求する |
+| `JEV_MODEL` | — | 既定 `typesafe-ai/jev` |
+
 ### 2. MCP を読み込む
 
 `.mcp.json` に登録済み。Claude Code をこのディレクトリで起動すれば `jev_*` ツールが生える。
