@@ -19,7 +19,8 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, relative, isAbsolute } from "node:path";
 
 import { callJev, describeClient, MODE } from "./jev.js";
-import { loadRubric, buildQuestions, interpret, fixList } from "./rubric.js";
+import { loadRubric, buildQuestions, interpret, fixList, groupStructure } from "./rubric.js";
+import { evaluateEscalation, previousReview, previousFailedGroupsOf } from "./escalation.js";
 import * as store from "./store.js";
 
 const REPO_ROOT = resolve(process.env.ZUKAI_REPO_ROOT || process.cwd());
@@ -94,19 +95,9 @@ server.registerTool(
     } catch (e) {
       return fail(e);
     }
-    const groups = rubric.groups.map((g) => {
-      const members = rubric.questions.filter((q) => q.group === g.key);
-      return {
-        key: g.key,
-        label: g.label,
-        questions: members.map((q) => q.key),
-        critical: members.filter((q) => q.critical).map((q) => q.key),
-        // 項目が1つで critical でもない群は group_fail_at に到達できず、永久に FAIL しない。
-        reachable:
-          members.some((q) => q.critical) || members.length >= rubric.thresholds.group_fail_at,
-      };
-    });
+    const groups = groupStructure(rubric);
     const unreachable = groups.filter((g) => !g.reachable).map((g) => g.key);
+    const fragile = groups.filter((g) => g.fragile).map((g) => g.key);
     return ok({
       ...describeClient(),
       repo_root: REPO_ROOT,
@@ -128,7 +119,10 @@ server.registerTool(
         MODE === "stub" ? `APIキー（AI_GATEWAY_API_KEY）が無いため stub モード。${STUB_WARNING}` : null,
         rubric.thresholds.calibrated ? null : CALIBRATION_WARNING,
         unreachable.length
-          ? `構造上 FAIL しえない群がある: ${unreachable.join(", ")}。項目が1つで critical でもないため group_fail_at に到達しない。次ラウンドのルーブリック再設計で解消すること。`
+          ? `構造上 FAIL しえない群がある: ${unreachable.join(", ")}。critical が無く、質問数が group_fail_at に届かない。ルーブリック再設計で解消すること。`
+          : null,
+        fragile.length
+          ? `FAIL に全問一致が必要な群がある: ${fragile.join(", ")}。critical が無く slack が 0 なので、1件の欠陥では落ちない。実質的にはほぼ到達しない。`
           : null,
       ].filter(Boolean),
     });
@@ -145,6 +139,8 @@ server.registerTool(
       "群は トレーサビリティ / 図のラベリング / 本文と図の整合 / 粒度と流れ / 認識の妥当性 の5つ。" +
       "critical 項目は単独で群FAIL、それ以外は群内2件以上で群FAIL。" +
       "s7_originality（一次経験の裏打ち）は判定に算入せず、人間確認の対象として別枠で返る。" +
+      "反復の停滞・振動はサーバー側で判定し escalate に入れて返すので、" +
+      "空でなければ回すのをやめて人間に返すこと。" +
       "結果は .jev/runs.jsonl に記録される。",
     inputSchema: {
       task: z.string().describe("この図解が説明すべき仕組み。依頼内容をそのまま。"),
@@ -180,6 +176,15 @@ server.registerTool(
       const res = await callJev(state, buildQuestions(rubric));
       const result = interpret(res.answers, rubric);
       const fixes = fixList(result, rubric);
+      // エスカレーションはサーバーが計算する。呼び出し側に履歴の突き合わせを任せると、
+      // 忘れた瞬間に静かに発火しなくなる（HANDOFF 2.3）。
+      const prev = previousReview(store.readAll(REPO_ROOT), runId, iteration);
+      const escalation = evaluateEscalation({
+        iteration,
+        verdict: result.verdict,
+        failedGroups: result.failed_groups,
+        previousFailedGroups: previousFailedGroupsOf(prev),
+      });
       const record = store.append(REPO_ROOT, {
         kind: "review",
         run_id: runId,
@@ -195,13 +200,16 @@ server.registerTool(
         rounding: res.rounding,
         polarity: result.polarity,
         verdict: result.verdict,
-        overall: result.overall,
         clean_ratio: result.clean_ratio,
         items: result.items,
         groups: result.groups,
         defects: result.defects,
         failed_groups: result.failed_groups,
         missing_answers: result.missing_answers,
+        unreachable_groups: result.unreachable_groups,
+        fragile_groups: result.fragile_groups,
+        escalate: escalation.escalate,
+        previous_failed_groups: escalation.previous_failed_groups,
         human_review: result.human_review,
         calibrated: result.calibrated,
       });
@@ -212,8 +220,9 @@ server.registerTool(
         artifact: artifact.path,
         iteration,
         last_verdict: result.verdict,
-        last_overall: result.overall,
+        last_clean_ratio: result.clean_ratio,
         last_failed_groups: result.failed_groups,
+        last_escalate: escalation.escalate,
         last_seq: record.seq,
       });
       return ok({
@@ -231,6 +240,11 @@ server.registerTool(
         // 1件でもあれば verdict は unknown。無視すると群の欠陥数が実際より少なく数えられる。
         missing_answers: result.missing_answers,
         unreachable_groups: result.unreachable_groups,
+        fragile_groups: result.fragile_groups,
+        // 空でなければ回すのをやめて人間に返す。判断は呼び出し側でなくここで済ませてある。
+        escalate: escalation.escalate,
+        escalation_reasons: escalation.reasons,
+        previous_failed_groups: escalation.previous_failed_groups,
         human_review: result.human_review,
         fixes,
         usage: res.usage,
@@ -241,6 +255,7 @@ server.registerTool(
           result.missing_answers.length
             ? `回答が欠けている質問がある: ${result.missing_answers.join(", ")}。判定不能として unknown を返した。人間に戻すこと。`
             : null,
+          ...escalation.reasons.map((r) => `エスカレーション（${r.id}）: ${r.reason}`),
           // プロバイダの警告を伏せない。設定が無視された等が黙って通ると判定の意味が変わる。
           ...res.provider_warnings.map(
             (w) => `Jev プロバイダの警告: ${typeof w === "string" ? w : JSON.stringify(w)}`
@@ -262,9 +277,13 @@ server.registerTool(
     description:
       "Jev の素の呼び出し。state と型付き質問マップを渡して一往復で全回答を得る。" +
       "各質問は { type: 'boolean'|'score', instructions, criteria? }。" +
-      "boolean は criteria 不要（付けるなら {true,false} の両方。片方だけは I/O 前にエラー）で、" +
+      "boolean は criteria 不要（付けるなら {true,false} の両方）で、" +
       "返り値は { type: 'boolean', probability } のみ（value フィールドは存在しない）。" +
-      "score は criteria に低→高の順序付き水準説明の配列を渡す。",
+      "score は criteria に低→高の順序付き水準説明の配列を渡し、返り値は 0 起点の小数位置。" +
+      "【使ってはいけない用途】公開可否・機密判定・コンプライアンス判定には使わないこと" +
+      "（HANDOFF 禁止事項 #4）。誤判定コストが非対称であり、かつ評価対象を外部APIに送りながら" +
+      "「外部に出してよいか」を外部に訊くのは論理矛盾。" +
+      "jev_gate を削除したのは同じ理由であり、このツールから同等の質問を再構成しないこと。",
     inputSchema: {
       state: z.string().describe("判断対象の文脈。テキストのみ。画像は評価できない。"),
       questions: z.record(z.string(), z.any()).describe("質問名 -> 質問オブジェクトのマップ。"),

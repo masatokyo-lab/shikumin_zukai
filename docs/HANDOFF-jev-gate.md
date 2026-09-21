@@ -341,11 +341,17 @@ claude mcp add jev-gate -- node "$(pwd)/jev-gate-server.mjs"
 水準3.6 は閾値4に届いていない、という読み方になる。
 
 **依然として未検証**：認証・課金・実際の返り値・一致度。`npm run probe` が通っていない（8章 #1 は未解決のまま）。
+2026-09-21 に実キーで試したが、実行環境の egress ポリシーが `ai-gateway.vercel.sh` /
+`api.typesafe.ai` / `console.typesafe.ai` のいずれも遮断しており（CONNECT に 403）、
+**Jev に到達できずリクエストは送出されていない**。鍵の有効性も未検証のまま。
+確認できたのは、SDK が `https://ai-gateway.vercel.sh/v4/ai/evaluation-model` へ送ること
+（5.1 の「Vercel AI Gateway 経由」は正しい）と、失敗が PASS に倒れず `isError` で落ちること。
 
 ## B. 原文の記述ミスと判断したもの
 
 | 箇所 | 原文 | 実体 |
 |---|---|---|
+| 3.1 の質問数 | diagram は「20問」 | Drive の `rubric-diagram.json` v0.4.0 は **22問**（g1:4 / g2:6 / g3:5 / g4:5 / g5:2）。3.5 の内訳の合計とも一致する。**3.1 の記載ミスと判断した**。article の18問は 3.1 / 3.5 / JSON すべて一致 |
 | 4章 / 6章 / 7.1 のファイル名 | `probe.mjs`、`jev-gate.mjs`、`calibrate.mjs` | Drive 上の実体は `.js`。`package.json` に `type: module` があるので `.js` で ESM として動く。**原文の表記ミスと判断した**（原文は変更していない） |
 | 4章 の依存 | `dotenv` | Node 20.12+ の `process.loadEnvFile()` で同じこと（`.env` のみ読む）ができるため、実装では依存を足していない。`.env` というファイル名の制約は原文どおり守っている |
 
@@ -357,9 +363,9 @@ claude mcp add jev-gate -- node "$(pwd)/jev-gate-server.mjs"
 |---|---|---|
 | 1 | 3.1: `rubric-article.json` と `rubric-diagram.json` の2本立て、18問 / 20問 | 単一の組み込みルーブリック、**8問**（+ s7）。記事用は無い |
 | 2 | 3.5: g1 は4問、g2 は6問、g3 は5問、g4 は5問、g5 は4問、g6 は5問 | 既存7項目 + grounded を5群に機械的に割り当てた暫定形。**g1 と g5 は1項目しかない** |
-| 3 | 3.3: `group_fail_at = 2` | そのまま使っているが、1項目の群では到達しえない。`g1_traceability` は critical も無いため**構造上 FAIL しない**。黙って緩まないよう `jev_ping` と `jev_review` が `unreachable_groups` として毎回報告する |
+| 3 | 3.3: `group_fail_at = 2` | そのまま使っているが、群あたり1〜2問しかないため機能していない。`g1_traceability` は**構造上 FAIL しない**（`unreachable`）、`g2` と `g4` は**全問一致が必要**（`fragile`）。結果として `block` を出せるのは `structure` と `grounded` の2問のみで、**ゲートは縮退している**。黙って緩まないよう `jev_ping` と `jev_review` が両方を毎回報告する。解消は #1 のルーブリック差し替え待ち |
 | 4 | 3.1: `g6_article_structure`（記事構造） | 未実装（図解のみを対象にしているため） |
-| 5 | 2.3: `stagnation` / `oscillation` の群単位検出 | 判定データ（`failed_groups`）は毎周記録しているが、検出ロジックは `.claude/skills/zukai-loop/SKILL.md` の手順としてしか存在しない。コードで強制していない |
+| 5 | ~~2.3: `stagnation` / `oscillation` の群単位検出~~ | **対応済み。** `mcp/escalation.js` がサーバー側で群単位に判定し、`jev_review` が `escalate` / `escalation_reasons` で返す。SKILL.md は「サーバーが返した `escalate` に従う」に変更 |
 | 6 | 7章: `samples.json` と `calibrate` | 未着手。**したがって閾値 0.70 / 0.50 / 2 は根拠のない初期値のまま**。6章「順序の原則」に対して配線が先行している状態 |
 
 ## D. 禁止事項に対する現状
@@ -367,8 +373,17 @@ claude mcp add jev-gate -- node "$(pwd)/jev-gate-server.mjs"
 | # | 禁止事項 | 実装での担保 |
 |---|---|---|
 | 1 | 群のオーバーライドを許可しない | 群判定を上書きする経路を設けていない |
-| 2 | エスカレーション判定を項目単位に戻さない | `failed_groups`（群単位）を記録し、SKILL.md が群単位で比較するよう指示 |
+| 2 | エスカレーション判定を項目単位に戻さない | `mcp/escalation.js` が群単位で比較し、`escalate` を返す。項目単位の ID は修正指示（`fixes`）にのみ使う |
 | 3 | s7 の人間確認を外さない | `s7_originality` は verdict に算入せず、`human_review.required: true` を毎回返す |
-| 4 | 公開可否判定に使わない | `shippable` ゲートと `jev_gate` ツールを削除。自己診断に不在確認のテストを置いた |
+| 4 | 公開可否判定に使わない | `shippable` ゲートと `jev_gate` ツールを削除。自己診断に不在確認のテストを置いた。加えて `jev_decide`（任意質問のパススルー）の description に「公開可否・機密・コンプライアンス判定に使わない」と `jev_gate` の再構成禁止を明記した。**description は抑止であって強制ではない**（キーワード検査は誤検知が出るうえ回避も容易） |
 | 5 | 判定不能を PASS に倒さない | API 失敗は `isError`。回答欠損・範囲外の値は `missing_answers` に入り `verdict: "unknown"` |
 | 6 | MCP 登録を較正より先にしない | **守れていない**（C-6）。`jev_ping` と `jev_review` が毎回「較正前の暫定値」と警告する形で可視化するに留めている |
+
+## E. HANDOFF に書かれていない防御（レビュー指摘への対応で追加）
+
+| 防御 | 理由 |
+|---|---|
+| `unreachable_groups` に加えて `fragile_groups` を報告 | 二値の到達可否では「2問で `group_fail_at: 2`」＝全問一致が必要な群を「到達可能」と誤報する。`slack`（critical 抜きで FAIL に届くまでの余裕）を出して区別する |
+| 自己診断の強制 stub（`ZUKAI_FORCE_STUB=1`） | `.env` を置いた瞬間に `npm run check` が live に切り替わり、実行のたびに外部へ state を送って課金される状態だった。鍵をプロセスに入れない |
+| `jev_decide` の description に禁止事項 #4 を明記 | `jev_gate` を消しても、任意質問のパススルーから同等の判定を再構成できる。description はモデルが毎回読むので、キーワード検査より確実性が高い場面がある |
+| `overall` の廃止 | 実体は「欠陥なしと答えられた質問の割合」で品質スコアではない。コメントで否定しても名前が誤用を招くため、`clean_ratio` に一本化した |

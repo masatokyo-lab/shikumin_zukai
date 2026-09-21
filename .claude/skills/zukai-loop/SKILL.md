@@ -35,6 +35,9 @@ jev_review({ task, artifact_path, source_material, note })
 - 返る `verdict` は `unknown` / `block` / `revise` / `ship`。
 - **`probability` は「欠陥が存在する確率」。高いほど悪い。** 逆に読まないこと。
 - `groups` に群ごとの FAIL、`fixes` に落ちた項目とそれが何を見ているかが入る。
+- `escalate` が空でなければ、**直さずに止めて人間に返す**（4 参照）。
+- `unreachable_groups` / `fragile_groups` は「構造上ほぼ落ちない群」。ここが出ている間、
+  その群は検査されていないに等しい。通ったことを根拠にしないこと。
 
 `verdict === "unknown"` または `missing_answers` が空でない場合、**回さずに人間に返す。**
 回答が欠けたまま進むと群の欠陥数が実際より少なく数えられ、静かにゲートが緩む。
@@ -59,17 +62,20 @@ jev_review({ task, artifact_path, source_material, note })
 一次経験の裏打ちは Jev の死角で、もっともらしい記述を生成すれば通過できてしまう。
 `human_review` の内容をユーザーに見せ、確認を取るまで完成報告しない（HANDOFF 禁止事項 #3）。
 
-以下のいずれかで**即座に止めて人間に返す**（HANDOFF 2.3）。**比較は群単位で行う。項目単位で比べると
-誤検出で毎回集合が変わり、常時発火する。**
+**止めどきは `jev_review` が `escalate` に入れて返す。自分で履歴を突き合わせない。**
+空でなければ**即座に止めて人間に返す**。`escalation_reasons` にそのまま使える理由文が入っている。
 
-| トリガー | 条件 |
+| トリガー | 意味 |
 |---|---|
-| `retry_limit` | 3 周に到達 |
-| `stagnation` | `failed_groups` の集合が前周と同一 |
-| `oscillation` | 前周になかった群が `failed_groups` に出現（総数が減っていても止める） |
+| `retry_limit` | 反復が上限（3周）に達した |
+| `stagnation` | FAIL群の集合が前周と同一。同じ場所を叩き続けている |
+| `oscillation` | 前周になかった群がFAILした。**総数が減っていても止める** |
 
 `oscillation` は項目間のトレードオフ（具体性↑で密度↓など）をモグラ叩きしている状態。
 回し続けても収束しないので、ルーブリックが合っていないか元資料が足りない。どちらかを述べて判断を仰ぐ。
+
+判定は**群単位**で行われている（項目単位だと誤検出で毎回集合が変わり常時発火する）。
+一方、修正指示に使うのは項目単位の ID。この二つを混同しないこと。
 
 `verdict === "unknown"` も即座に止める（2 参照）。
 
@@ -95,6 +101,8 @@ jev_review({ task, artifact_path, source_material, note })
 - `s7_originality` の人間確認を飛ばして完成を報告すること。
 - 群の判定を黙って無視すること。オーバーライドは s7 のみ、かつ理由を明示して。
 - 判定不能（`unknown` / `missing_answers`）を通過扱いにすること。
+- `escalate` が返っているのに回し続けること。止めどきの判定はサーバーが済ませてある。
+- `jev_decide` に「公開してよいか」型の質問を投げること。`jev_gate` を消したのと同じ理由。
 - ルーブリックに通すためだけに図解から情報を削ること（`density` の欠陥は消えるが `structure` が立つ。
   立たなければ検査が甘い）。
 - 「公開してよいか」を Jev に訊くこと。この環境はその判定をしない（HANDOFF 禁止事項 #4）。

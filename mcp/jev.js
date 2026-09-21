@@ -20,21 +20,28 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+// 自己診断は必ず stub で走らせる。鍵が置いてあるだけで live に切り替わると、
+// npm run check がネットワークと課金に依存し、実行のたびに外部へ state を送ることになる。
+// ZUKAI_FORCE_STUB=1 のときは .env を読みに行かない（鍵をプロセスに入れない）。
+const FORCE_STUB = process.env.ZUKAI_FORCE_STUB === "1";
+
 // HANDOFF 6章 既知のつまずき #1: 鍵のファイル名は必ず .env。
 // dotenv は既定で .env しか読まないが、Node 20.12+ の組み込みで同じことができるので依存を足さない。
-try {
-  const envPath = resolve(process.env.ZUKAI_REPO_ROOT || process.cwd(), ".env");
-  if (existsSync(envPath) && typeof process.loadEnvFile === "function") {
-    process.loadEnvFile(envPath);
+if (!FORCE_STUB) {
+  try {
+    const envPath = resolve(process.env.ZUKAI_REPO_ROOT || process.cwd(), ".env");
+    if (existsSync(envPath) && typeof process.loadEnvFile === "function") {
+      process.loadEnvFile(envPath);
+    }
+  } catch {
+    // .env が壊れていても stub では動く。live なら鍵が無い扱いになり MODE で露見する。
   }
-} catch {
-  // .env が壊れていても stub では動く。live なら鍵が無い扱いになり MODE で露見する。
 }
 
 const MODEL = process.env.JEV_MODEL || "typesafe-ai/jev";
 // HANDOFF 5.1: 認証は Vercel AI Gateway。旧実装の TYPESAFE_API_KEY は受けない
 // （エンドポイントが別物なので、通ってしまうより落ちた方が安全）。
-const API_KEY = process.env.AI_GATEWAY_API_KEY || "";
+const API_KEY = FORCE_STUB ? "" : process.env.AI_GATEWAY_API_KEY || "";
 const TIMEOUT_MS = Number(process.env.JEV_TIMEOUT_MS || 20000);
 const CONTEXT_TOKENS = 32000; // HANDOFF 5.1
 
@@ -49,6 +56,7 @@ export function describeClient() {
     transport: "vercel-ai-gateway",
     key_env: "AI_GATEWAY_API_KEY",
     key_present: Boolean(API_KEY),
+    forced_stub: FORCE_STUB,
     context_tokens: CONTEXT_TOKENS,
     agreement_note:
       "Jev の一致度は約68%（自社4ワークフロー評価で67.8%）。正解ラベルは他モデルの平均であり「正しさ」ではなく「一致度」。",

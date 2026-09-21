@@ -239,7 +239,7 @@
     {
       seq: 2, iteration: 2, kind: "review", artifact: "artifacts/例.html", mode: "stub",
       model: "typesafe-ai/jev", latency_ms: 310, verdict: "revise",
-      polarity: "defect", overall: 0.75, clean_ratio: 0.75,
+      polarity: "defect", clean_ratio: 0.75,
       ts: new Date(Date.now() - 42000).toISOString(), note: "ラベルを具体化",
       items: [
         { key: "standalone", label: "自己完結性", group: "g1_traceability", probability: 0.18, threshold: 0.7, defect: false, critical: false },
@@ -252,24 +252,27 @@
         { key: "grounded", label: "裏付けのない断定", group: "g5_epistemic", probability: 0.12, threshold: 0.5, defect: false, critical: true },
       ],
       groups: [
-        { key: "g1_traceability", label: "トレーサビリティ", size: 1, reachable: false, defects: [], critical_defects: [], fail: false },
-        { key: "g2_figure_labeling", label: "図のラベリング", size: 2, reachable: true, defects: ["legibility"], critical_defects: [], fail: false },
-        { key: "g3_text_figure_alignment", label: "本文と図の整合", size: 2, reachable: true, defects: [], critical_defects: [], fail: false },
-        { key: "g4_granularity_flow", label: "粒度と流れ", size: 2, reachable: true, defects: ["density"], critical_defects: [], fail: false },
-        { key: "g5_epistemic", label: "認識の妥当性", size: 1, reachable: true, defects: [], critical_defects: [], fail: false },
+        { key: "g1_traceability", label: "トレーサビリティ", size: 1, slack: -1, reachable: false, fragile: false, defects: [], critical_defects: [], fail: false },
+        { key: "g2_figure_labeling", label: "図のラベリング", size: 2, slack: 0, reachable: true, fragile: true, defects: ["legibility"], critical_defects: [], fail: false },
+        { key: "g3_text_figure_alignment", label: "本文と図の整合", size: 2, slack: -1, reachable: true, fragile: false, defects: [], critical_defects: [], fail: false },
+        { key: "g4_granularity_flow", label: "粒度と流れ", size: 2, slack: 0, reachable: true, fragile: true, defects: ["density"], critical_defects: [], fail: false },
+        { key: "g5_epistemic", label: "認識の妥当性", size: 1, slack: -2, reachable: true, fragile: false, defects: [], critical_defects: [], fail: false },
       ],
       defects: ["legibility", "density"],
       failed_groups: [],
       missing_answers: [],
+      fragile_groups: ["g2_figure_labeling", "g4_granularity_flow"],
+      escalate: [],
       human_review: { required: true, label: "一次経験の裏打ち", level: 3.4, threshold: 4, meets_threshold: false },
     },
     {
       seq: 1, iteration: 1, kind: "review", artifact: "artifacts/例.html", mode: "stub",
       model: "typesafe-ai/jev", latency_ms: 298, verdict: "block",
-      polarity: "defect", overall: 0.5, clean_ratio: 0.5,
+      polarity: "defect", clean_ratio: 0.5,
       ts: new Date(Date.now() - 300000).toISOString(), note: "初版",
       items: [], groups: [], defects: ["structure", "labels", "density", "legibility"],
       failed_groups: ["g3_text_figure_alignment", "g2_figure_labeling"], missing_answers: [],
+      fragile_groups: [], escalate: ["oscillation"],
       human_review: { required: true, label: "一次経験の裏打ち", level: 2.1, threshold: 4, meets_threshold: false },
     },
   ];
@@ -314,7 +317,7 @@
     const v = $("lVerdict");
     v.dataset.v = ev.verdict || "unknown";
     v.textContent = VERDICT_JA[ev.verdict] || ev.verdict || "—";
-    const clean = ev.clean_ratio != null ? ev.clean_ratio : ev.overall;
+    const clean = ev.clean_ratio;
     $("lOverall").textContent = clean != null ? clean.toFixed(2) : "—";
 
     // 極性は defect。probability は「欠陥が存在する確率」で、棒が伸びるほど悪い。
@@ -335,9 +338,13 @@
       .join("");
 
     const notes = [];
+    // 止めどきはサーバーが判定している。パネルでも最初に出す。
+    for (const id of ev.escalate || []) {
+      notes.push(`<span class="g"><span class="miss">中止: ${id}</span> <em>人間に返すこと</em></span>`);
+    }
     for (const g of ev.groups || []) {
       const state = g.fail ? '<span class="miss">FAIL</span>' : `${g.defects.length}/${g.size}`;
-      notes.push(`<span class="g">${g.label} <b>${state}</b>${g.reachable === false ? " <em>(判定不能な群)</em>" : ""}</span>`);
+      notes.push(`<span class="g">${g.label} <b>${state}</b>${g.reachable === false ? " <em>(構造上FAILしない群)</em>" : g.fragile ? " <em>(全問一致が必要)</em>" : ""}</span>`);
     }
     const hr = ev.human_review;
     if (hr) {
@@ -359,7 +366,7 @@
 
   function renderTrend(evals) {
     const pts = evals
-      .map((e) => ({ ...e, _y: e.clean_ratio != null ? e.clean_ratio : e.overall }))
+      .map((e) => ({ ...e, _y: e.clean_ratio }))
       .filter((e) => typeof e._y === "number")
       .sort((a, b) => a.seq - b.seq)
       .map((e) => ({ x: e.iteration || e.seq, y: e._y }));
@@ -387,7 +394,7 @@
     $("log").innerHTML = evals
       .map((e) => `<li>
         <span class="it">#${e.iteration ?? "-"}</span>
-        <span class="what">${"検査"}${e.note ? ` <em>${e.note}</em>` : ""}<br><em>${ago(e.ts)}${(e.clean_ratio ?? e.overall) != null ? " · 欠陥なし率 " + (e.clean_ratio ?? e.overall).toFixed(2) : ""}${(e.defects ?? e.failures)?.length ? " · 欠陥 " + (e.defects ?? e.failures).length : ""}</em></span>
+        <span class="what">${"検査"}${e.note ? ` <em>${e.note}</em>` : ""}<br><em>${ago(e.ts)}${e.clean_ratio != null ? " · 欠陥なし率 " + e.clean_ratio.toFixed(2) : ""}${e.defects?.length ? " · 欠陥 " + e.defects.length : ""}${e.escalate?.length ? " · 中止 " + e.escalate.join("/") : ""}</em></span>
         <span class="v" data-v="${e.verdict || "unknown"}">${VERDICT_JA[e.verdict] || "—"}</span>
       </li>`)
       .join("");

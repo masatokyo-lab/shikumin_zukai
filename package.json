@@ -9,7 +9,7 @@
   },
   "scripts": {
     "mcp": "node mcp/server.js",
-    "check": "node mcp/selftest.js",
+    "check": "ZUKAI_FORCE_STUB=1 node mcp/selftest.js",
     "probe": "node mcp/probe.js"
   },
   "dependencies": {

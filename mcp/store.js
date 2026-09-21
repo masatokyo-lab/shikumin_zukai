@@ -73,7 +73,10 @@ export function summarize(repoRoot) {
     const entry = byRun.get(r.run_id) || { run_id: r.run_id, artifact: r.artifact, evaluations: 0 };
     entry.evaluations += 1;
     entry.last_verdict = r.verdict ?? entry.last_verdict;
-    entry.last_overall = r.overall ?? entry.last_overall;
+    // 品質スコアではなく「欠陥なしと答えられた質問の割合」。ゲートには使わない。
+    entry.last_clean_ratio = r.clean_ratio ?? entry.last_clean_ratio;
+    entry.last_failed_groups = r.failed_groups ?? entry.last_failed_groups;
+    entry.last_escalate = r.escalate ?? entry.last_escalate;
     entry.last_ts = r.ts;
     entry.artifact = r.artifact || entry.artifact;
     byRun.set(r.run_id, entry);

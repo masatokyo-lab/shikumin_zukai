@@ -154,6 +154,37 @@ function thresholdFor(question, thresholds) {
     : thresholds.probability_threshold;
 }
 
+/**
+ * 回答を見ずに、群が構造上どこまで FAIL しうるかを出す。
+ * interpret と jev_ping の両方がこれを使う（判定が2箇所でずれないように）。
+ *
+ * `slack` は「critical 抜きで FAIL に到達するまでの余裕」:
+ *   slack  < 0  → unreachable: critical が無ければ構造上 FAIL しない
+ *   slack === 0 → fragile:     critical が無ければ**全問一致**が必要で、実質ほぼ到達しない
+ *
+ * 二値の reachable だけだと、1問しかない群は検出できても
+ * 「2問で group_fail_at=2」の群が「到達可能」と判定されて漏れる。
+ */
+export function groupStructure(rubric) {
+  const failAt = rubric.thresholds.group_fail_at;
+  return rubric.groups.map((g) => {
+    const members = rubric.questions.filter((q) => q.group === g.key);
+    const critical = members.filter((q) => q.critical).map((q) => q.key);
+    const slack = members.length - critical.length - failAt;
+    return {
+      key: g.key,
+      label: g.label,
+      size: members.length,
+      questions: members.map((q) => q.key),
+      critical,
+      fail_at: failAt,
+      slack,
+      reachable: critical.length > 0 || slack >= 0,
+      fragile: critical.length === 0 && slack === 0,
+    };
+  });
+}
+
 export function interpret(answers, rubric) {
   const t = rubric.thresholds;
 
@@ -175,26 +206,23 @@ export function interpret(answers, rubric) {
   // HANDOFF 4章: 答えが欠けると群の欠陥数が実際より少なく数えられ、静かにゲートが緩む。
   const missing_answers = items.filter((i) => i.defect === null).map((i) => i.key);
 
-  const groups = rubric.groups.map((g) => {
+  const groups = groupStructure(rubric).map((g) => {
     const members = items.filter((i) => i.group === g.key);
     const defects = members.filter((i) => i.defect === true);
     const criticalDefects = defects.filter((i) => i.critical);
-    // この群が構造上 FAIL しうるか。項目が1つしかなく critical でもない群は
-    // group_fail_at=2 に到達できず、永久に FAIL しない。黙って緩むのを防ぐため露出する。
-    const reachable = members.some((m) => m.critical) || members.length >= t.group_fail_at;
     return {
-      key: g.key,
-      label: g.label,
-      size: members.length,
-      reachable,
+      ...g,
       defects: defects.map((d) => d.key),
       critical_defects: criticalDefects.map((d) => d.key),
       // critical は単独で FAIL、それ以外は群内 group_fail_at 件以上で FAIL。
-      fail: criticalDefects.length > 0 || defects.length >= t.group_fail_at,
+      fail: criticalDefects.length > 0 || defects.length >= g.fail_at,
     };
   });
 
+  // 構造上 FAIL しない群（unreachable）と、全問一致が要る群（fragile）を隠さない。
+  // 黙って緩んでいる箇所は必ず露出させる。
   const unreachable_groups = groups.filter((g) => !g.reachable).map((g) => g.key);
+  const fragile_groups = groups.filter((g) => g.fragile).map((g) => g.key);
   const failedGroups = groups.filter((g) => g.fail);
   const defects = items.filter((i) => i.defect === true);
 
@@ -236,15 +264,16 @@ export function interpret(answers, rubric) {
   return {
     verdict,
     polarity: "defect",
+    // 「欠陥なしと答えられた質問の割合」。**品質スコアではないのでゲートに使わない。**
+    // かつて overall という名前で出していたが、名前が必ず誤用されるので廃止した。
     clean_ratio,
-    // ダッシュボード互換。品質スコアではない。
-    overall: clean_ratio,
     items,
     groups,
     defects: defects.map((d) => d.key),
     failed_groups: failedGroups.map((g) => g.key),
     missing_answers,
     unreachable_groups,
+    fragile_groups,
     human_review,
     calibrated: Boolean(rubric.thresholds.calibrated),
   };

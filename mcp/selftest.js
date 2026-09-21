@@ -11,7 +11,8 @@ import { dirname, resolve } from "node:path";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { DEFAULT_RUBRIC, interpret, fixList, loadRubric } from "./rubric.js";
+import { DEFAULT_RUBRIC, interpret, fixList, loadRubric, groupStructure } from "./rubric.js";
+import { evaluateEscalation, previousReview, previousFailedGroupsOf } from "./escalation.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const serverPath = resolve(here, "server.js");
@@ -116,8 +117,47 @@ check("範囲外の score（5段階で 5）は読まない", s7(5).level === nul
 check("負の score は読まない", s7(-1).level === null);
 check("score の生値は0起点で残る", s7(2.6).raw === 2.6, String(s7(2.6).raw));
 
-// 構造上 FAIL しえない群を隠さない
+// R4: overall は廃止。clean_ratio だけを出す。
+check("interpret は overall を返さない", !("overall" in clean), JSON.stringify(Object.keys(clean)));
+check("clean_ratio は残っている", typeof clean.clean_ratio === "number");
+
+// R3: 構造上 FAIL しえない群（unreachable）と全問一致が要る群（fragile）を隠さない
 check("FAILしえない群が露出する", clean.unreachable_groups.includes("g1_traceability"), String(clean.unreachable_groups));
+const struct = Object.fromEntries(groupStructure(R).map((g) => [g.key, g]));
+check("g1 は critical なし slack < 0 で unreachable", struct.g1_traceability.slack < 0 && struct.g1_traceability.reachable === false, JSON.stringify(struct.g1_traceability));
+check("g2 は slack 0 で fragile（全問一致が必要）", struct.g2_figure_labeling.slack === 0 && struct.g2_figure_labeling.fragile === true, JSON.stringify(struct.g2_figure_labeling));
+check("g4 も fragile", struct.g4_granularity_flow.fragile === true);
+check("critical を持つ群は fragile にしない", struct.g3_text_figure_alignment.fragile === false && struct.g5_epistemic.fragile === false);
+check("critical を持つ群は reachable", struct.g3_text_figure_alignment.reachable && struct.g5_epistemic.reachable);
+check("unreachable は fragile と重複しない", !clean.fragile_groups.includes("g1_traceability"));
+check("fragile_groups が g2 と g4 を拾う", clean.fragile_groups.length === 2 && clean.fragile_groups.includes("g2_figure_labeling") && clean.fragile_groups.includes("g4_granularity_flow"), String(clean.fragile_groups));
+
+// R2: エスカレーション。比較は群単位。
+const esc = (p) => evaluateEscalation({ maxRetries: 3, ...p }).escalate;
+check("前周が無ければ何も出さない", esc({ iteration: 1, verdict: "block", failedGroups: ["g3"], previousFailedGroups: null }).length === 0);
+check("stagnation: 同じ群で2周", esc({ iteration: 2, verdict: "block", failedGroups: ["g3"], previousFailedGroups: ["g3"] }).includes("stagnation"));
+check("stagnation: 順序が違っても同一集合", esc({ iteration: 2, verdict: "block", failedGroups: ["g4", "g3"], previousFailedGroups: ["g3", "g4"] }).includes("stagnation"));
+check("oscillation: 前回に無い群が出現", esc({ iteration: 2, verdict: "block", failedGroups: ["g4"], previousFailedGroups: ["g3"] }).includes("oscillation"));
+check("oscillation: 総数が減っても発火", esc({ iteration: 2, verdict: "block", failedGroups: ["g4"], previousFailedGroups: ["g3", "g5"] }).includes("oscillation"));
+check("群が減っただけでは oscillation しない", !esc({ iteration: 2, verdict: "block", failedGroups: ["g3"], previousFailedGroups: ["g3", "g5"] }).includes("oscillation"));
+check("retry_limit: 3周目で発火", esc({ iteration: 3, verdict: "block", failedGroups: ["g3"], previousFailedGroups: ["g9"] }).includes("retry_limit"));
+check("retry_limit: 2周目では出ない", !esc({ iteration: 2, verdict: "block", failedGroups: ["g3"], previousFailedGroups: ["g9"] }).includes("retry_limit"));
+check("ship した周はエスカレーションしない", esc({ iteration: 5, verdict: "ship", failedGroups: [], previousFailedGroups: [] }).length === 0);
+check("通った周（FAIL群が空）で stagnation を出さない", !esc({ iteration: 2, verdict: "revise", failedGroups: [], previousFailedGroups: [] }).includes("stagnation"));
+check("unknown でも retry_limit は効く", esc({ iteration: 3, verdict: "unknown", failedGroups: [], previousFailedGroups: [] }).includes("retry_limit"));
+check("理由文が付く", evaluateEscalation({ iteration: 3, verdict: "block", failedGroups: ["g3"], previousFailedGroups: ["g3"] }).reasons.every((r) => typeof r.reason === "string" && r.reason.length > 0));
+
+// R2: 記録が古くて failed_groups を持たない場合は比較しない（[] と誤読すると oscillation が誤発火する）
+check("failed_groups の無い記録は比較対象にしない", previousFailedGroupsOf({ kind: "review" }) === null);
+check("failed_groups があれば拾う", JSON.stringify(previousFailedGroupsOf({ failed_groups: ["g3"] })) === '["g3"]');
+const history = [
+  { run_id: "a", kind: "review", iteration: 1, failed_groups: ["g3"] },
+  { run_id: "a", kind: "review", iteration: 2, failed_groups: ["g4"] },
+  { run_id: "b", kind: "review", iteration: 1, failed_groups: ["g9"] },
+];
+check("previousReview は同じ run の直前を返す", previousReview(history, "a", 3)?.iteration === 2);
+check("previousReview は他の run を混ぜない", previousReview(history, "b", 2)?.failed_groups[0] === "g9");
+check("previousReview は最初の周で null", previousReview(history, "a", 1) === null);
 
 // 較正されていないことを毎回言う
 check("calibrated は false", clean.calibrated === false);
@@ -146,7 +186,8 @@ await client.connect(
   new StdioClientTransport({
     command: process.execPath,
     args: [serverPath],
-    env: { ...process.env, ZUKAI_REPO_ROOT: sandbox },
+    // 鍵が置いてあっても自己診断は stub で走らせる。ネットワークと課金に依存させない。
+    env: { ...process.env, ZUKAI_REPO_ROOT: sandbox, ZUKAI_FORCE_STUB: "1" },
   })
 );
 
@@ -160,13 +201,15 @@ for (const t of ["jev_ping", "jev_review", "jev_decide", "jev_feed", "jev_status
 check("jev_gate は廃止されている", !tools.includes("jev_gate"));
 
 const ping = parse(await client.callTool({ name: "jev_ping", arguments: {} }));
-check("ping がモードを返す", ping.mode === "live" || ping.mode === "stub", ping.mode);
+check("自己診断は必ず stub で走る", ping.mode === "stub" && ping.forced_stub === true, `${ping.mode} forced=${ping.forced_stub}`);
 check("ping が極性を返す", ping.rubric.polarity === "defect");
 check("ping が3閾値を返す", ping.rubric.thresholds.probability_threshold === 0.7 && ping.rubric.thresholds.critical_probability_threshold === 0.5 && ping.rubric.thresholds.group_fail_at === 2);
 check("ping が鍵の env 名を返す", ping.key_env === "AI_GATEWAY_API_KEY");
 check("ping が5群を返す", ping.rubric.groups.length === 5, String(ping.rubric.groups.length));
 check("ping が較正前だと警告する", ping.warnings.some((w) => w.includes("較正")));
 check("ping が FAILしえない群を警告する", ping.warnings.some((w) => w.includes("g1_traceability")));
+check("ping が全問一致の要る群を警告する", ping.warnings.some((w) => w.includes("全問一致")), JSON.stringify(ping.warnings));
+check("ping の群に slack が入る", ping.rubric.groups.every((g) => typeof g.slack === "number"));
 
 const review = parse(
   await client.callTool({
@@ -198,16 +241,52 @@ const review2 = parse(
 check("2回目で iteration が増える", review2.iteration === 2, String(review2.iteration));
 check("2回目は同じ run を共有する", review2.run_id === review.run_id);
 
+// R2: 往復でもエスカレーションが返る。
+// stub は state のハッシュで答えを決めるので、note が違えば確率も変わる。
+// stagnation を確実に踏むには **2周目と完全に同じ引数**で3周目を回す。
+check("1周目は escalate が空", Array.isArray(review.escalate) && review.escalate.length === 0, JSON.stringify(review.escalate));
+check("1周目は previous_failed_groups が null", review.previous_failed_groups === null);
+check("2周目に前周の FAIL群 が入る", Array.isArray(review2.previous_failed_groups), JSON.stringify(review2.previous_failed_groups));
+
+const review3 = parse(
+  await client.callTool({
+    name: "jev_review",
+    arguments: { task: "同上", artifact_path: "sample.html", note: "2回目" },
+  })
+);
+check("3周目は state が2周目と同一なので FAIL群も同一", JSON.stringify(review3.failed_groups) === JSON.stringify(review2.failed_groups), `${review3.failed_groups} vs ${review2.failed_groups}`);
+if (review3.failed_groups.length) {
+  check("同じ結果が続くと stagnation", review3.escalate.includes("stagnation"), JSON.stringify(review3.escalate));
+  check("stagnation が warnings にも出る", review3.warnings.some((w) => w.includes("stagnation")));
+  check("理由文が付いて返る", review3.escalation_reasons.some((r) => r.id === "stagnation" && r.reason));
+} else {
+  check("落ちていない周では stagnation しない", !review3.escalate.includes("stagnation"));
+}
+if (review3.verdict !== "ship") {
+  check("3周目で retry_limit も出る", review3.escalate.includes("retry_limit"), JSON.stringify(review3.escalate));
+}
+
+// R3 / R4 を往復でも確認
+check("review が fragile_groups を返す", Array.isArray(review.fragile_groups) && review.fragile_groups.length === 2, JSON.stringify(review.fragile_groups));
+check("review に overall が無い", !("overall" in review) && !JSON.stringify(review).includes('"overall"'));
+
 const feed = parse(await client.callTool({ name: "jev_feed", arguments: { since_seq: 0 } }));
-check("feed が全件返す", feed.records.length === 2, String(feed.records.length));
-check("feed がカーソルを進める", feed.next_since_seq === 2, String(feed.next_since_seq));
+check("feed が全件返す", feed.records.length === 3, String(feed.records.length));
+check("feed がカーソルを進める", feed.next_since_seq === 3, String(feed.next_since_seq));
 check("feed のレコードに群が入る", Array.isArray(feed.records[0].groups));
-const tail = parse(await client.callTool({ name: "jev_feed", arguments: { since_seq: 1 } }));
+const tail = parse(await client.callTool({ name: "jev_feed", arguments: { since_seq: 2 } }));
 check("feed が since_seq を尊重する", tail.records.length === 1);
 
 const status = parse(await client.callTool({ name: "jev_status", arguments: {} }));
-check("status が評価数を数える", status.total_evaluations === 2, String(status.total_evaluations));
+check("status が評価数を数える", status.total_evaluations === 3, String(status.total_evaluations));
 check("status がラン後に idle に戻る", status.state.status === "idle", status.state.status);
+check("status に overall が残っていない", !JSON.stringify(status).includes("overall"));
+check("status が clean_ratio を集計する", status.runs.every((r) => "last_clean_ratio" in r), JSON.stringify(status.runs));
+
+// R6: jev_decide が禁止事項 #4 の抜け道にならないよう description で抑止する
+const decideTool = (await client.listTools()).tools.find((t) => t.name === "jev_decide");
+check("jev_decide が公開可否に使うなと明示する", /公開可否/.test(decideTool.description) && /禁止事項 #4/.test(decideTool.description), decideTool.description?.slice(0, 120));
+check("jev_decide が jev_gate の再構成を禁じる", /再構成しない/.test(decideTool.description));
 
 const decide = parse(
   await client.callTool({
