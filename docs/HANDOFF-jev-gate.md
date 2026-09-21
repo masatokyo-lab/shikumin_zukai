@@ -344,6 +344,10 @@ claude mcp add jev-gate -- node "$(pwd)/jev-gate-server.mjs"
 2026-09-21 に実キーで試したが、実行環境の egress ポリシーが `ai-gateway.vercel.sh` /
 `api.typesafe.ai` / `console.typesafe.ai` のいずれも遮断しており（CONNECT に 403）、
 **Jev に到達できずリクエストは送出されていない**。鍵の有効性も未検証のまま。
+同日の別セッション（ルーブリック差し替えの回）で再試行したが結果は同じ。
+`CONNECT ai-gateway.vercel.sh:443` に `HTTP/1.1 403 Forbidden`、`api.typesafe.ai` も同様。
+そのセッションには鍵自体が渡っていないため、鍵無しでは probe が `stub` を検出して
+成功を装わずに終了すること（意図どおり）と、ダミー鍵では Gateway に届かないことだけを確認した。
 確認できたのは、SDK が `https://ai-gateway.vercel.sh/v4/ai/evaluation-model` へ送ること
 （5.1 の「Vercel AI Gateway 経由」は正しい）と、失敗が PASS に倒れず `isError` で落ちること。
 
@@ -357,16 +361,39 @@ claude mcp add jev-gate -- node "$(pwd)/jev-gate-server.mjs"
 
 ## C. 実装がまだ原文に合っていないところ
 
-本ラウンドは**禁止事項の違反解消と API 層の準拠化**に絞った。以下は次ラウンドの宿題。
-
 | # | 原文 | 現状の実装 |
 |---|---|---|
-| 1 | 3.1: `rubric-article.json` と `rubric-diagram.json` の2本立て、18問 / 20問 | 単一の組み込みルーブリック、**8問**（+ s7）。記事用は無い |
-| 2 | 3.5: g1 は4問、g2 は6問、g3 は5問、g4 は5問、g5 は4問、g6 は5問 | 既存7項目 + grounded を5群に機械的に割り当てた暫定形。**g1 と g5 は1項目しかない** |
-| 3 | 3.3: `group_fail_at = 2` | そのまま使っているが、群あたり1〜2問しかないため機能していない。`g1_traceability` は**構造上 FAIL しない**（`unreachable`）、`g2` と `g4` は**全問一致が必要**（`fragile`）。結果として `block` を出せるのは `structure` と `grounded` の2問のみで、**ゲートは縮退している**。黙って緩まないよう `jev_ping` と `jev_review` が両方を毎回報告する。解消は #1 のルーブリック差し替え待ち |
-| 4 | 3.1: `g6_article_structure`（記事構造） | 未実装（図解のみを対象にしているため） |
-| 5 | ~~2.3: `stagnation` / `oscillation` の群単位検出~~ | **対応済み。** `mcp/escalation.js` がサーバー側で群単位に判定し、`jev_review` が `escalate` / `escalation_reasons` で返す。SKILL.md は「サーバーが返した `escalate` に従う」に変更 |
-| 6 | 7章: `samples.json` と `calibrate` | 未着手。**したがって閾値 0.70 / 0.50 / 2 は根拠のない初期値のまま**。6章「順序の原則」に対して配線が先行している状態 |
+| 1 | ~~3.1: `rubric-article.json` と `rubric-diagram.json` の2本立て、18問 / 22問~~ | **対応済み。** Drive「99. Jev連携」の v0.4.0 をリポジトリ直下に取り込み、`mcp/rubric.js` が読む。`jev_review` の `scope`（`diagram` 既定 / `article`）で切り替える |
+| 2 | ~~3.5: g1 は4問、g2 は6問、g3 は5問、g4 は5問、g5 は4問、g6 は5問~~ | **対応済み。** 差し替えで内訳どおりになった（diagram 4/6/5/5/2、article 4/5/4/5）。自己診断が群ごとの問数を毎回突き合わせる |
+| 3 | ~~3.3: `group_fail_at = 2`~~ | **対応済み。** 縮退は解消。両ルーブリックとも `unreachable` / `fragile` はゼロで、g1 も2件の欠陥で落ちる。報告経路（`unreachable_groups` / `fragile_groups`）は較正でいじったときの再発検出用に残してある |
+| 4 | ~~3.1: `g6_article_structure`（記事構造）~~ | **対応済み。** `rubric-article.json` に5問。`scope: "article"` で有効になる |
+| 5 | ~~2.3: `stagnation` / `oscillation` の群単位検出~~ | **対応済み。** `mcp/escalation.js` がサーバー側で群単位に判定し、`jev_review` が `escalate` / `escalation_reasons` で返す |
+| 6 | 7章: `samples.json` と `calibrate` | **未着手。閾値 0.70 / 0.50 / 2 は根拠のない初期値のまま。** 6章「順序の原則」に対して配線が先行している状態は解消していない |
+| 7 | 5.2 / 8章 #1: probe を通す | **未達。** 実行環境の egress が `ai-gateway.vercel.sh` を遮断しており到達できない（A 節末尾） |
+
+### ルーブリック差し替えで判明したこと
+
+| 箇所 | 原文 | 実体 |
+|---|---|---|
+| 8章 #3 の critical 指定 | 「`rubric-article.json` の critical は `g6_no_conclusion_first` と g5 の4問のみ」 | Drive の v0.4.0 では g5 のうち critical は3問。`g5_overstated_conclusion` は critical ではない。**原文の記述ミスと判断した**（合計4問という数だけは合っている） |
+| 3.1 の質問数 | diagram は「20問」 | B 節に記録済みのとおり 22問。差し替えで実装も22問になった |
+
+### 差し替えで消えた検査
+
+暫定ルーブリックには Drive 正本に対応する質問が無い項目が2つあり、差し替えで**落ちた**。
+黙って消さないためにここに残す。
+
+| 消えた項目 | 何を見ていたか | 代替 |
+|---|---|---|
+| `legibility` | スマホ幅で読めるか、ライト/ダークのコントラストが足りているか | 無し。SKILL.md の生成規則として残し、Jev では検査しない |
+| `hierarchy` | サイズ・色・配置が重要度の順序と一致しているか | 無し（`g4_*` が粒度は見るが視覚階層は見ない） |
+
+どちらも HTML アーティファクト固有の関心で、Drive のルーブリックは媒体に依存しない欠陥だけを
+扱っている。必要なら **Drive 側に足してから取り込む**こと。リポジトリ側だけで足すと
+「Drive を正とする」が崩れ、次に取り込んだ時点で黙って消える。
+
+なお `standalone` / `labels` / `structure` / `causality` / `density` / `grounded` は
+正本側のより細かい質問（`g1_*` / `g2_*` / `g3_*` / `g4_*` / `g5_*`）に吸収されている。
 
 ## D. 禁止事項に対する現状
 
@@ -377,7 +404,7 @@ claude mcp add jev-gate -- node "$(pwd)/jev-gate-server.mjs"
 | 3 | s7 の人間確認を外さない | `s7_originality` は verdict に算入せず、`human_review.required: true` を毎回返す |
 | 4 | 公開可否判定に使わない | `shippable` ゲートと `jev_gate` ツールを削除。自己診断に不在確認のテストを置いた。加えて `jev_decide`（任意質問のパススルー）の description に「公開可否・機密・コンプライアンス判定に使わない」と `jev_gate` の再構成禁止を明記した。**description は抑止であって強制ではない**（キーワード検査は誤検知が出るうえ回避も容易） |
 | 5 | 判定不能を PASS に倒さない | API 失敗は `isError`。回答欠損・範囲外の値は `missing_answers` に入り `verdict: "unknown"` |
-| 6 | MCP 登録を較正より先にしない | **守れていない**（C-6）。`jev_ping` と `jev_review` が毎回「較正前の暫定値」と警告する形で可視化するに留めている |
+| 6 | MCP 登録を較正より先にしない | **守れていない**（C-6）。ルーブリックは正本に揃ったが、閾値は較正されていない。`jev_ping` と `jev_review` が毎回「較正前の暫定値」と警告する形で可視化するに留めている |
 
 ## E. HANDOFF に書かれていない防御（レビュー指摘への対応で追加）
 

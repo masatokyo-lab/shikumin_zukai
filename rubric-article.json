@@ -1,0 +1,153 @@
+{
+  "rubric_version": "0.4.0",
+  "scope": "article",
+  "updated": "2026-09-20",
+  "note": "図を伴わない記事・裏取り資料・解説文用。rubric-diagram から g2(軸・単位) と g3(本文と図の整合) を外し、記事特有の群を追加。",
+  "polarity": "defect",
+  "polarity_note": "全ての boolean は『欠陥が存在するか』を問う。value=true は欠陥あり=FAIL。",
+  "scoring": {
+    "probability_threshold": 0.7,
+    "critical_probability_threshold": 0.5,
+    "group_fail_at": 2,
+    "rationale": "20問を独立したハードゲートにすると誤検出で常時FAILする。閾値と群判定で実効ゲート数を約6に下げる。",
+    "threshold_semantics": "boolean は probability(P(true)) を直接閾値と比較する。value フィールドは存在しない。"
+  },
+  "groups": {
+    "g1_traceability": {
+      "label": "コンテキスト品質（情報のトレーサビリティ）",
+      "questions": {
+        "g1_omitted_subject": {
+          "type": "boolean",
+          "instructions": "主語・目的語・対象が省略され、直前の文脈だけでは何を指しているか特定できない箇所があるか。"
+        },
+        "g1_vague_deixis": {
+          "type": "boolean",
+          "instructions": "「これ」「それ」「上記」などの指示語が過剰に使われ、参照先が曖昧な箇所があるか。"
+        },
+        "g1_unexplained_topic_shift": {
+          "type": "boolean",
+          "instructions": "情報の追加や話題の切り替えに対して、なぜその話がここで出てくるのかが追えない箇所があるか。"
+        },
+        "g1_requires_backtracking": {
+          "type": "boolean",
+          "instructions": "結論に至るまでに、読者が前の文章へ戻って参照しないと理解できない構成になっているか。"
+        }
+      }
+    },
+    "g4_granularity_flow": {
+      "label": "粒度バランス",
+      "questions": {
+        "g4_opening_too_abstract": {
+          "type": "boolean",
+          "instructions": "読者が持っている情報量に対して、最初の問いが抽象的すぎるか。"
+        },
+        "g4_premise_skipped": {
+          "type": "boolean",
+          "instructions": "必要な前提を提示する前に、結論レベルの大きな問いを投げているか。"
+        },
+        "g4_question_info_mismatch": {
+          "type": "boolean",
+          "instructions": "追加された情報と、それに対する問いの粒度が合っていないか。"
+        },
+        "g4_mixed_concerns": {
+          "type": "boolean",
+          "instructions": "一つの問いに、複数の異なる論点が混在しているか。"
+        },
+        "g4_abrupt_abstraction_jump": {
+          "type": "boolean",
+          "instructions": "説明の途中で、抽象度が段階を踏まずに大きく変化する箇所があるか。"
+        }
+      }
+    },
+    "g5_epistemic": {
+      "label": "事実と推測の区別",
+      "questions": {
+        "g5_unmarked_speculation": {
+          "type": "boolean",
+          "critical": true,
+          "instructions": "裏付けのない記述が、推測であることを示さずに事実として断定されているか。"
+        },
+        "g5_fabricated_specificity": {
+          "type": "boolean",
+          "critical": true,
+          "instructions": "出典が示されないまま、具体的な数値・製品名・日付が確定情報のように書かれているか。"
+        },
+        "g5_source_granularity_gap": {
+          "type": "boolean",
+          "critical": true,
+          "instructions": "出典が大項目にしか示されておらず、その中の個別の数値・製品名・年代には出典が対応していない箇所があるか。"
+        },
+        "g5_overstated_conclusion": {
+          "type": "boolean",
+          "instructions": "引用元の主張より強い結論に言い換えられているか。限定つきの知見が無条件の断定になっていないか。"
+        }
+      }
+    },
+    "g6_article_structure": {
+      "label": "記事としての構成",
+      "questions": {
+        "g6_no_conclusion_first": {
+          "type": "boolean",
+          "critical": true,
+          "instructions": "冒頭の2〜3文で結論が示されておらず、前置きや背景説明から始まっているか。"
+        },
+        "g6_generic_advice": {
+          "type": "boolean",
+          "instructions": "誰にでも当てはまる一般論や教科書的な記述で構成されており、固有の条件・数値・事例に踏み込んでいないか。"
+        },
+        "g6_no_downside": {
+          "type": "boolean",
+          "instructions": "リスク・ダウンサイド・前提が崩れる条件が併記されず、利点や成功シナリオのみで構成されているか。"
+        },
+        "g6_not_actionable": {
+          "type": "boolean",
+          "instructions": "読者がそのまま実行できる具体的な手順・数値が無く、抽象的な方針提示で終わっているか。"
+        },
+        "g6_filler": {
+          "type": "boolean",
+          "instructions": "定型的な前置き・お世辞・「いかがでしたか」型の締めが含まれているか。"
+        }
+      }
+    }
+  },
+  "scored": {
+    "s7_originality": {
+      "type": "score",
+      "threshold": 4,
+      "human_review_required": true,
+      "instructions": "組み込み・低レイヤの一次経験に裏打ちされた内容か。1=どのAIでも書ける一般論、3=調べれば書ける、5=実務経験がないと書けない。",
+      "blind_spot": "Jevは具体性の手触りしか見ておらず、記述が実体験に基づくかを検証できない。もっともらしい捏造を通過させる。人間の目視が必須。",
+      "criteria": [
+        "どのAIでも書ける一般論",
+        "調べれば書ける範囲の情報",
+        "調べた上で整理・構造化されている",
+        "実務経験がないと書けない具体性がある",
+        "当事者しか知り得ない詳細が含まれる"
+      ],
+      "threshold_note": "score の返り値の下限が1か0かは未検証。probe.mjs の出力で確認して調整すること。"
+    }
+  },
+  "escalation": {
+    "max_retries": 3,
+    "compare_at": "group",
+    "compare_at_note": "停滞・振動の判定は20項目ではなく群(5個)の単位で行う。項目単位だと誤検出で毎回集合が変わり、oscillation が常時発火する。修正指示には項目単位のIDを使う。",
+    "triggers": [
+      {
+        "id": "retry_limit",
+        "condition": "retry_count >= 3"
+      },
+      {
+        "id": "stagnation",
+        "condition": "FAIL群の集合が前回と同一"
+      },
+      {
+        "id": "oscillation",
+        "condition": "前回になかったFAIL群が出現"
+      }
+    ]
+  },
+  "changelog": {
+    "0.3.0": "rubric.v0.1 を欠陥極性・群構造・確率閾値に移行して復元。g5 に出典粒度と結論の誇張を追加。",
+    "0.4.0": "実API仕様に合わせて修正。boolean の答えは value ではなく probability(P(true)) のみ。score は scale ではなく criteria(水準説明の配列)。AI SDK 7 以降が必要。"
+  }
+}

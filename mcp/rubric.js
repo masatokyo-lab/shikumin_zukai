@@ -1,138 +1,225 @@
-// 仕組み図解 の品質ルーブリック。
-// 仕様は docs/HANDOFF-jev-gate.md 3章。リポジトリ直下に jev.rubric.json を置くと差し替えられる。
+// 品質ルーブリックの読み込みと判定。仕様は docs/HANDOFF-jev-gate.md 3章。
+//
+// ルーブリックの実体は **リポジトリ直下の rubric-article.json / rubric-diagram.json**。
+// これは Google Drive「99. Jev連携」の同名ファイル（v0.4.0）をそのまま取り込んだもので、
+// HANDOFF 3.1 の「共通版は作らない」に従い2本立てになっている:
+//
+//   rubric-article.json  図を伴わない文章    g1 / g4 / g5 / g6   18問 + scored 1
+//   rubric-diagram.json  図解コンテンツ      g1 / g2 / g3 / g4 / g5  22問 + scored 1
+//
+// （HANDOFF 3.1 の本文は diagram を「20問」としているが、3.5 の内訳の合計も Drive の
+//   実ファイルも 22問。付記 B に記録したとおり 3.1 の記載ミスと判断している。）
 //
 // 極性は defect。全ての boolean 質問は「欠陥が存在するか」を問い、probability は
-// 欠陥が存在する確率。HANDOFF 3.2: v0.1 は逆の極性（「良いか」）だった。古いコードを
-// 流用する場合は必ず反転すること — loadRubric が polarity を検査して誤流用を止める。
+// 欠陥が存在する確率。HANDOFF 3.2: v0.1 は逆の極性（「良いか」）だった。古いコードや
+// 古いルーブリックを流用する場合は必ず反転すること — loadRubric が polarity を検査して止める。
 
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readScoreLevel, readProbability, readScore } from "./jev.js";
 
-// s7_originality の水準。低→高の順。
-const LEVELS = [
-  "水準1: 一般に入手できる情報の再構成のみ。一次経験の痕跡がない",
-  "水準2: 経験を語っているが、どの現場・どの制約でも言える内容",
-  "水準3: 具体的な事象に触れているが、判断の理由まで踏み込んでいない",
-  "水準4: 具体的な事象と、そこで何を選び何を捨てたかが書かれている",
-  "水準5: その現場に立った者しか書けない制約・失敗・回避策が書かれている",
-];
+// ルーブリックの正本はリポジトリに同梱されている。ZUKAI_REPO_ROOT は評価対象と
+// .jev/ の置き場所であってルーブリックの置き場所ではないので、既定はパッケージ側を見る。
+const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// 群。HANDOFF 3.5 の群構成に既存の項目キーを割り当てたもの。
-// 本来の群構成（g1 は 4 問、g2 は 6 問…）とは項目数が合わない。次ラウンドで
-// rubric-article.json / rubric-diagram.json に差し替える前提の暫定形。
-const GROUPS = [
-  { key: "g1_traceability", label: "トレーサビリティ" },
-  { key: "g2_figure_labeling", label: "図のラベリング" },
-  { key: "g3_text_figure_alignment", label: "本文と図の整合" },
-  { key: "g4_granularity_flow", label: "粒度と流れ" },
-  { key: "g5_epistemic", label: "認識の妥当性" },
-];
+export const SCOPES = ["diagram", "article"];
+export const DEFAULT_SCOPE = "diagram";
 
-export const DEFAULT_RUBRIC = {
-  profile: "zukai",
-  polarity: "defect",
-  levels: LEVELS,
-  groups: GROUPS,
-  // 全て boolean。criteria は付けない。
-  // （HANDOFF 5.1 は「両方揃えるか両方省くか、片方だけはエラー」としているが、
-  //  EvaluationModelV4 の型では true / false が各々 optional。付けないので影響しない。）
-  questions: [
-    {
-      key: "standalone",
-      label: "自己完結性",
-      group: "g1_traceability",
-      instructions:
-        "口頭の補足説明なしでは、この図だけを見た第三者が仕組みを理解できない箇所があるか。指示語の指す先が図内で辿れない、前提が図外にある等。",
-    },
-    {
-      key: "labels",
-      label: "ラベルの一般論語",
-      group: "g2_figure_labeling",
-      instructions:
-        "ラベルに「最適化」「連携強化」「効率化」のような一般論語が使われているか。主体・動作・対象のいずれかが特定できないラベルがあるか。",
-    },
-    {
-      key: "legibility",
-      label: "可読性の不足",
-      group: "g2_figure_labeling",
-      instructions:
-        "スマートフォン幅で読めない箇所があるか。ライトモード・ダークモードのいずれかでコントラストが不足しているか。文字が小さすぎる箇所があるか。",
-    },
-    {
-      key: "structure",
-      label: "構造の不一致",
-      group: "g3_text_figure_alignment",
-      critical: true,
-      instructions:
-        "構造（要素の分け方・階層・包含関係）が説明対象の仕組みを写していない箇所があるか。並列でないものが並列に置かれている、包含関係が逆または欠けている等。",
-    },
-    {
-      key: "causality",
-      label: "因果の曖昧さ",
-      group: "g3_text_figure_alignment",
-      instructions:
-        "矢印・順序・分岐に曖昧さがあるか。向きや起点終点が不明な線、何が何を引き起こすのか読み取れない箇所があるか。",
-    },
-    {
-      key: "density",
-      label: "情報密度の破綻",
-      group: "g4_granularity_flow",
-      instructions:
-        "情報量が1枚で処理できる範囲を超えているか。または薄すぎて図解にした意味がない状態か。",
-    },
-    {
-      key: "hierarchy",
-      label: "視覚階層の不整合",
-      group: "g4_granularity_flow",
-      instructions:
-        "サイズ・色・配置が重要度の順序と一致していないか。最も重要な要素より先に目に入る装飾的要素があるか。",
-    },
-    {
-      key: "grounded",
-      label: "裏付けのない断定",
-      group: "g5_epistemic",
-      critical: true,
-      instructions:
-        "図解に、入力資料で裏付けられていない断定・具体的数値・製品名が混入しているか。出典の粒度が主張の粒度に対応していない箇所があるか。",
-      // HANDOFF 3.4: これが立っても「出典を確認せよ」という指示であり、
-      // 「事実が間違っている」という判定ではない。真偽検証は Jev の死角。
-      means: "出典を確認せよ（事実の真偽判定ではない。確認作業は人間かウェブ検索が要る）",
-    },
-  ],
-  // 唯一の scored 質問。verdict には算入しない。
-  // HANDOFF 禁止事項 #3: s7 の人間確認を外さない。Jev の死角であり、
-  // もっともらしく具体的な記述を生成すれば通過できてしまう。
-  scored: {
-    key: "s7_originality",
-    label: "一次経験の裏打ち",
-    instructions:
-      "この内容は、組み込み・低レイヤの一次経験に裏打ちされているか。一般に入手できる情報の再構成にとどまっていないか。",
-    threshold: 4,
-    human_review_required: true,
-  },
-  // HANDOFF 3.3。いずれも較正前の暫定値。0.70 と 0.50 に根拠はない。
-  thresholds: {
-    probability_threshold: 0.7,
-    critical_probability_threshold: 0.5,
-    group_fail_at: 2,
-    calibrated: false,
-  },
+const SCOPE_NOTE = {
+  diagram: "図解コンテンツ用。g2（軸・単位）と g3（本文と図の整合）を含む。",
+  article: "図を伴わない文章用。g2 / g3 は図が無いと空振りするので外し、g6（記事構成）を足す。",
 };
 
-export function loadRubric(repoRoot) {
-  const path = join(repoRoot, "jev.rubric.json");
-  if (!existsSync(path)) return DEFAULT_RUBRIC;
-  const custom = JSON.parse(readFileSync(path, "utf8"));
-  // 極性の誤流用を止める。v0.1 の「良いか」極性のルーブリックを読み込むと
-  // 判定が全て裏返り、欠陥のある図解が ship になる。
-  if (custom.polarity !== "defect") {
+// 質問IDの短い表示名。ルーブリックJSON（Drive 正本）には label が無いので、
+// 表示とダッシュボードのためにここで持つ。**判定には一切使わない。**
+// 未知のIDはキーをそのまま出す（黙って空欄にしない）。
+const QUESTION_LABELS = {
+  g1_omitted_subject: "主語の省略",
+  g1_vague_deixis: "指示語の曖昧さ",
+  g1_unexplained_topic_shift: "話題転換の不明瞭",
+  g1_requires_backtracking: "読み返しの強制",
+  g2_no_title: "タイトルの欠落",
+  g2_axis_meaning_unclear: "軸の意味の不明示",
+  g2_missing_unit: "単位の欠落",
+  g2_label_data_mismatch: "ラベルとデータの不一致",
+  g2_misleading_scale: "誤解を招くスケール",
+  g2_missing_legend: "凡例の欠落",
+  g3_question_mismatch: "問いと図の不一致",
+  g3_wrong_chart_type: "図種の誤り",
+  g3_missing_time_axis: "時間軸の欠落",
+  g3_granularity_gap: "本文と図の粒度差",
+  g3_figure_not_supporting: "補強の不成立",
+  g4_opening_too_abstract: "冒頭の抽象度",
+  g4_premise_skipped: "前提の飛ばし",
+  g4_question_info_mismatch: "問いと情報の粒度不整合",
+  g4_mixed_concerns: "論点の混在",
+  g4_abrupt_abstraction_jump: "抽象度の跳躍",
+  g5_unmarked_speculation: "無標の推測",
+  g5_fabricated_specificity: "出典なき具体性",
+  g5_source_granularity_gap: "出典粒度の不一致",
+  g5_overstated_conclusion: "結論の誇張",
+  g6_no_conclusion_first: "結論先出しの欠如",
+  g6_generic_advice: "一般論",
+  g6_no_downside: "リスクの欠落",
+  g6_not_actionable: "実行不能",
+  g6_filler: "定型句",
+};
+
+// HANDOFF 3.4: g5_* が立っても「出典を確認せよ」という指示であり、
+// 「その事実が間違っている」という判定ではない。真偽検証は Jev の死角。
+const G5_MEANS =
+  "出典を確認せよ（事実の真偽判定ではない。確認作業は人間かウェブ検索が要る）";
+
+function rubricPath(repoRoot, scope) {
+  // リポジトリ側に同名ファイルがあればそちらを使う（較正の結果を反映する置き場所）。
+  const local = repoRoot ? join(repoRoot, `rubric-${scope}.json`) : null;
+  if (local && existsSync(local)) return { path: local, origin: "repo_root" };
+  const bundled = join(PKG_ROOT, `rubric-${scope}.json`);
+  if (existsSync(bundled)) return { path: bundled, origin: "bundled" };
+  return null;
+}
+
+/**
+ * Drive 正本の形（群がオブジェクト、質問が群の中のオブジェクト）を、
+ * 判定側が使う平坦な形に直す。**内容は足さない。** 足すと Drive と食い違う。
+ */
+function normalize(raw, scope, source) {
+  // 極性の誤流用を止める。v0.1 の「良いか」極性を読み込むと判定が全て裏返り、
+  // 欠陥のある成果物が ship になる。
+  if (raw.polarity !== "defect") {
     throw new Error(
-      'jev.rubric.json の polarity が "defect" ではありません。' +
+      `${source.file} の polarity が "defect" ではありません（実際: ${JSON.stringify(raw.polarity)}）。` +
         "全ての boolean 質問は「欠陥が存在するか」を問う形でなければなりません（HANDOFF 3.2）。"
     );
   }
-  return { ...DEFAULT_RUBRIC, ...custom, source: "jev.rubric.json" };
+  if (raw.scope && raw.scope !== scope) {
+    throw new Error(
+      `${source.file} の scope が "${raw.scope}" です。"${scope}" として読み込もうとしています。` +
+        "取り違えると図の無い文章に g2/g3 を当てることになります。"
+    );
+  }
+
+  const groups = [];
+  const questions = [];
+  for (const [groupKey, group] of Object.entries(raw.groups || {})) {
+    groups.push({ key: groupKey, label: group.label || groupKey });
+    for (const [key, q] of Object.entries(group.questions || {})) {
+      if (q.type !== "boolean") {
+        throw new Error(`${source.file} の ${key} は type が "${q.type}" です。群の質問は boolean のみ。`);
+      }
+      if (typeof q.instructions !== "string" || !q.instructions.trim()) {
+        throw new Error(`${source.file} の ${key} に instructions がありません。`);
+      }
+      questions.push({
+        key,
+        label: QUESTION_LABELS[key] || key,
+        group: groupKey,
+        critical: Boolean(q.critical),
+        instructions: q.instructions,
+        ...(groupKey === "g5_epistemic" ? { means: G5_MEANS } : {}),
+      });
+    }
+  }
+  if (!groups.length || !questions.length) {
+    throw new Error(`${source.file} に群または質問がありません。`);
+  }
+
+  // scored は1つだけ（HANDOFF 3.5: scored は s7_originality のみ）。
+  const scoredEntries = Object.entries(raw.scored || {});
+  if (scoredEntries.length !== 1) {
+    throw new Error(`${source.file} の scored は1件でなければなりません（実際: ${scoredEntries.length}件）。`);
+  }
+  const [scoredKey, scored] = scoredEntries[0];
+  if (!Array.isArray(scored.criteria) || scored.criteria.length < 2) {
+    throw new Error(
+      `${source.file} の ${scoredKey} に criteria（低→高の順序付き水準説明の配列）がありません。` +
+        "score 質問は scale ではなく criteria で水準を渡す（HANDOFF 5.1）。"
+    );
+  }
+
+  const scoring = raw.scoring || {};
+  for (const k of ["probability_threshold", "critical_probability_threshold", "group_fail_at"]) {
+    if (typeof scoring[k] !== "number") {
+      throw new Error(`${source.file} の scoring.${k} が数値ではありません。`);
+    }
+  }
+
+  return {
+    scope,
+    scope_note: SCOPE_NOTE[scope],
+    version: raw.rubric_version || null,
+    updated: raw.updated || null,
+    source: source.file,
+    source_origin: source.origin,
+    polarity: "defect",
+    levels: scored.criteria,
+    groups,
+    questions,
+    scored: {
+      key: scoredKey,
+      label: "一次経験の裏打ち",
+      instructions: scored.instructions,
+      criteria: scored.criteria,
+      // HANDOFF 禁止事項 #3: s7 の人間確認を外さない。JSON が false でも外させない。
+      human_review_required: true,
+      threshold: scored.threshold,
+      blind_spot: scored.blind_spot || null,
+    },
+    thresholds: {
+      probability_threshold: scoring.probability_threshold,
+      critical_probability_threshold: scoring.critical_probability_threshold,
+      group_fail_at: scoring.group_fail_at,
+      rationale: scoring.rationale || null,
+      // HANDOFF 3.3「0.70 と 0.50 に根拠はない。較正でスイープして決めること」。
+      // 較正済みを名乗れるのは samples.json と calibrate を通した後だけ。
+      calibrated: raw.calibrated === true,
+    },
+    escalation: {
+      max_retries: raw.escalation?.max_retries ?? 3,
+      compare_at: raw.escalation?.compare_at ?? "group",
+    },
+  };
+}
+
+const cache = new Map();
+
+/**
+ * @param {string} repoRoot 評価対象リポジトリのルート（ルーブリックの上書き置き場）
+ * @param {"diagram"|"article"} scope 対象コンテンツの種類
+ */
+export function loadRubric(repoRoot, scope = DEFAULT_SCOPE) {
+  if (!SCOPES.includes(scope)) {
+    throw new Error(`未知の scope: ${JSON.stringify(scope)}。${SCOPES.join(" / ")} のいずれか。`);
+  }
+  const found = rubricPath(repoRoot, scope);
+  if (!found) {
+    // 無いときに弱い内蔵ルーブリックへ落ちない。基準が黙って入れ替わるくらいなら止める。
+    throw new Error(
+      `rubric-${scope}.json が見つかりません（探した場所: ${repoRoot} と ${PKG_ROOT}）。` +
+        "Drive「99. Jev連携」の同名ファイルを配置すること。"
+    );
+  }
+  const file = `rubric-${scope}.json`;
+  const key = `${found.path}::${scope}`;
+  const stamp = readFileSync(found.path, "utf8");
+  const hit = cache.get(key);
+  if (hit && hit.stamp === stamp) return hit.rubric;
+
+  let raw;
+  try {
+    raw = JSON.parse(stamp);
+  } catch (e) {
+    throw new Error(`${file} が JSON として読めません: ${e.message}`);
+  }
+  const rubric = normalize(raw, scope, { file, origin: found.origin, path: found.path });
+  cache.set(key, { stamp, rubric });
+  return rubric;
+}
+
+/** 全 scope を読む。jev_ping が両方の構造を報告するのに使う。 */
+export function loadAllRubrics(repoRoot) {
+  return SCOPES.map((scope) => loadRubric(repoRoot, scope));
 }
 
 export function buildQuestions(rubric) {
@@ -263,6 +350,8 @@ export function interpret(answers, rubric) {
 
   return {
     verdict,
+    scope: rubric.scope,
+    rubric_version: rubric.version,
     polarity: "defect",
     // 「欠陥なしと答えられた質問の割合」。**品質スコアではないのでゲートに使わない。**
     // かつて overall という名前で出していたが、名前が必ず誤用されるので廃止した。

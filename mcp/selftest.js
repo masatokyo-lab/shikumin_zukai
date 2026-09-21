@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// 自己診断。2 部構成:
-//   A. MCP ハンドシェイクから jev_review / jev_feed までを実際に往復させる
+// 自己診断。3 部構成:
+//   A. ルーブリック 2 本（diagram / article）が HANDOFF 3.5 の構成どおりに読めるか
 //   B. interpret() の判定ロジックを作った回答で直接検査する（極性・群判定・欠損・s7）
+//   C. MCP ハンドシェイクから jev_review / jev_feed までを実際に往復させる
 // APIキーが無くても stub モードで通る。ai パッケージも不要。`npm run check` で実行。
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -11,17 +12,33 @@ import { dirname, resolve } from "node:path";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { DEFAULT_RUBRIC, interpret, fixList, loadRubric, groupStructure } from "./rubric.js";
+import {
+  loadRubric,
+  loadAllRubrics,
+  groupStructure,
+  interpret,
+  fixList,
+  SCOPES,
+  DEFAULT_SCOPE,
+} from "./rubric.js";
 import { evaluateEscalation, previousReview, previousFailedGroupsOf } from "./escalation.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const serverPath = resolve(here, "server.js");
+const pkgRoot = resolve(here, "..");
 const sandbox = mkdtempSync(resolve(tmpdir(), "zukai-selftest-"));
 
 const SAMPLE = `<!doctype html><html lang="ja"><head><title>受注から出荷までの仕組み</title></head>
 <body><h1>受注から出荷まで</h1>
 <p>営業が受注入力 → 在庫引当 → 倉庫がピッキング → 出荷検品 → 配送業者へ引き渡し</p></body></html>`;
 writeFileSync(resolve(sandbox, "sample.html"), SAMPLE, "utf8");
+
+const SAMPLE_ARTICLE = `# 受注から出荷までを内製で回すか外注するか
+
+結論: 月200件を超えるまでは内製で回した方が総コストは低い。
+根拠は、外注の固定費が件数に依らず発生する一方、内製の追加工数は件数に比例するため。
+ただし繁忙期の人員を確保できることが前提で、これが崩れると逆転する。`;
+writeFileSync(resolve(sandbox, "sample-article.md"), SAMPLE_ARTICLE, "utf8");
 
 const fails = [];
 const check = (name, cond, detail) => {
@@ -33,10 +50,104 @@ const check = (name, cond, detail) => {
 };
 const parse = (res) => JSON.parse(res.content[0].text);
 
-// ── B. 判定ロジック ────────────────────────────────────────────────────────
-console.log("判定ロジック（interpret）");
+// ── A. ルーブリック 2 本 ───────────────────────────────────────────────────
+console.log("ルーブリック（HANDOFF 3.1 / 3.5）");
 
-const R = DEFAULT_RUBRIC;
+check("scope は diagram と article の2つ", JSON.stringify(SCOPES) === '["diagram","article"]', String(SCOPES));
+check("既定の scope は diagram", DEFAULT_SCOPE === "diagram");
+
+const R = loadRubric(pkgRoot, "diagram");
+const RA = loadRubric(pkgRoot, "article");
+const all = loadAllRubrics(pkgRoot);
+check("loadAllRubrics が2本返す", all.length === 2, String(all.length));
+
+// HANDOFF 3.1: 共通版は作らない。図が無いと g2 / g3 は空振りする。
+check("diagram は 22 問（HANDOFF 3.5 の内訳の合計）", R.questions.length === 22, String(R.questions.length));
+check("article は 18 問", RA.questions.length === 18, String(RA.questions.length));
+check("diagram の群は g1/g2/g3/g4/g5", JSON.stringify(R.groups.map((g) => g.key)) === '["g1_traceability","g2_figure_labeling","g3_text_figure_alignment","g4_granularity_flow","g5_epistemic"]', String(R.groups.map((g) => g.key)));
+check("article の群は g1/g4/g5/g6", JSON.stringify(RA.groups.map((g) => g.key)) === '["g1_traceability","g4_granularity_flow","g5_epistemic","g6_article_structure"]', String(RA.groups.map((g) => g.key)));
+check("article に g2（軸・単位）は無い", !RA.groups.some((g) => g.key === "g2_figure_labeling"));
+check("article に g3（本文と図の整合）は無い", !RA.groups.some((g) => g.key === "g3_text_figure_alignment"));
+check("diagram に g6（記事構成）は無い", !R.groups.some((g) => g.key === "g6_article_structure"));
+
+const sizeOf = (rubric, key) => rubric.questions.filter((q) => q.group === key).length;
+check("g1 は4問（両方）", sizeOf(R, "g1_traceability") === 4 && sizeOf(RA, "g1_traceability") === 4);
+check("g2 は6問", sizeOf(R, "g2_figure_labeling") === 6, String(sizeOf(R, "g2_figure_labeling")));
+check("g3 は5問", sizeOf(R, "g3_text_figure_alignment") === 5, String(sizeOf(R, "g3_text_figure_alignment")));
+check("g4 は5問（両方）", sizeOf(R, "g4_granularity_flow") === 5 && sizeOf(RA, "g4_granularity_flow") === 5);
+check("g5 は diagram 2問 / article 4問", sizeOf(R, "g5_epistemic") === 2 && sizeOf(RA, "g5_epistemic") === 4, `${sizeOf(R, "g5_epistemic")} / ${sizeOf(RA, "g5_epistemic")}`);
+check("g6 は5問（article のみ）", sizeOf(RA, "g6_article_structure") === 5, String(sizeOf(RA, "g6_article_structure")));
+
+// 3.5: g5_source_granularity_gap と g5_overstated_conclusion は article 版のみ
+const hasQ = (rubric, key) => rubric.questions.some((q) => q.key === key);
+check("出典粒度の不一致は article のみ", hasQ(RA, "g5_source_granularity_gap") && !hasQ(R, "g5_source_granularity_gap"));
+check("結論の誇張は article のみ", hasQ(RA, "g5_overstated_conclusion") && !hasQ(R, "g5_overstated_conclusion"));
+
+for (const rubric of all) {
+  check(`${rubric.scope}: 極性は defect`, rubric.polarity === "defect");
+  check(`${rubric.scope}: scored は s7_originality ひとつ`, rubric.scored.key === "s7_originality");
+  check(`${rubric.scope}: s7 は人間確認必須（禁止事項 #3）`, rubric.scored.human_review_required === true);
+  check(`${rubric.scope}: s7 の水準は5段階`, rubric.levels.length === 5, String(rubric.levels.length));
+  check(`${rubric.scope}: 較正前として扱われる`, rubric.thresholds.calibrated === false);
+  check(`${rubric.scope}: 閾値は 0.70 / 0.50 / 2`, rubric.thresholds.probability_threshold === 0.7 && rubric.thresholds.critical_probability_threshold === 0.5 && rubric.thresholds.group_fail_at === 2);
+  check(`${rubric.scope}: 全問に表示名が付く`, rubric.questions.every((q) => q.label && q.label !== q.key), String(rubric.questions.filter((q) => q.label === q.key).map((q) => q.key)));
+  check(`${rubric.scope}: g5 に「出典を確認せよ」の注記が付く（HANDOFF 3.4）`, rubric.questions.filter((q) => q.group === "g5_epistemic").every((q) => typeof q.means === "string"));
+  check(`${rubric.scope}: 公開可否（shippable）が存在しない`, !/shippable|公開可否/.test(JSON.stringify(rubric)));
+
+  // R1 の目的。群が構造上 FAIL しえない／全問一致が要る状態を解消するための差し替えだった。
+  const st = groupStructure(rubric);
+  check(`${rubric.scope}: FAIL しえない群が無い`, st.every((g) => g.reachable), String(st.filter((g) => !g.reachable).map((g) => g.key)));
+  check(`${rubric.scope}: 全問一致が要る群が無い`, st.every((g) => !g.fragile), String(st.filter((g) => g.fragile).map((g) => g.key)));
+}
+
+// critical 指定（HANDOFF 8章 #3 の現状）
+const criticalOf = (rubric) => rubric.questions.filter((q) => q.critical).map((q) => q.key);
+check("diagram の critical は g2 3問 / g3 2問 / g5 2問", JSON.stringify(criticalOf(R)) === '["g2_no_title","g2_axis_meaning_unclear","g2_missing_unit","g3_question_mismatch","g3_missing_time_axis","g5_unmarked_speculation","g5_fabricated_specificity"]', String(criticalOf(R)));
+check("article の critical は g5 3問 + g6 の結論先出し", JSON.stringify(criticalOf(RA)) === '["g5_unmarked_speculation","g5_fabricated_specificity","g5_source_granularity_gap","g6_no_conclusion_first"]', String(criticalOf(RA)));
+
+// 壊れたルーブリックは読まない。基準が黙って入れ替わるくらいなら止める。
+const badDir = mkdtempSync(resolve(tmpdir(), "zukai-badrubric-"));
+const tryLoad = (dir, scope) => {
+  try {
+    loadRubric(dir, scope);
+    return null;
+  } catch (e) {
+    return e.message;
+  }
+};
+writeFileSync(resolve(badDir, "rubric-diagram.json"), JSON.stringify({ polarity: "quality", groups: {}, scored: {} }), "utf8");
+check("polarity が defect でないルーブリックは拒否される", Boolean(tryLoad(badDir, "diagram")));
+writeFileSync(resolve(badDir, "rubric-diagram.json"), JSON.stringify({ polarity: "defect", scope: "article", groups: {}, scored: {} }), "utf8");
+check("scope が食い違うルーブリックは拒否される", Boolean(tryLoad(badDir, "diagram")));
+writeFileSync(resolve(badDir, "rubric-diagram.json"), "{ broken", "utf8");
+check("壊れた JSON は拒否される", Boolean(tryLoad(badDir, "diagram")));
+check("未知の scope は拒否される", Boolean(tryLoad(pkgRoot, "poster")));
+
+// 構造判定そのものの回帰テスト。実ルーブリックが健全になっても、
+// unreachable / fragile を見つける能力は失わせない。
+const synthetic = {
+  thresholds: { group_fail_at: 2 },
+  groups: [{ key: "solo" }, { key: "pair" }, { key: "pair_with_critical" }, { key: "trio" }],
+  questions: [
+    { key: "a", group: "solo" },
+    { key: "b", group: "pair" },
+    { key: "c", group: "pair" },
+    { key: "d", group: "pair_with_critical", critical: true },
+    { key: "e", group: "pair_with_critical" },
+    { key: "f", group: "trio" },
+    { key: "g", group: "trio" },
+    { key: "h", group: "trio" },
+  ],
+};
+const sstruct = Object.fromEntries(groupStructure(synthetic).map((g) => [g.key, g]));
+check("1問の群は unreachable（slack < 0）", sstruct.solo.reachable === false && sstruct.solo.slack < 0, JSON.stringify(sstruct.solo));
+check("2問で group_fail_at=2 の群は fragile（slack 0）", sstruct.pair.fragile === true && sstruct.pair.slack === 0, JSON.stringify(sstruct.pair));
+check("critical を持つ群は fragile にしない", sstruct.pair_with_critical.fragile === false && sstruct.pair_with_critical.reachable === true);
+check("余裕のある群は unreachable でも fragile でもない", sstruct.trio.reachable === true && sstruct.trio.fragile === false && sstruct.trio.slack === 1);
+
+// ── B. 判定ロジック ────────────────────────────────────────────────────────
+console.log("\n判定ロジック（interpret）");
+
 const QKEYS = R.questions.map((q) => q.key);
 
 // 全問「欠陥なし」+ s7 満点。上書きで個別のケースを作る。
@@ -55,45 +166,46 @@ function answers(overrides = {}, { omit = [] } = {}) {
 }
 const run = (overrides, opts) => interpret(answers(overrides, opts), R);
 
-// 極性: 欠陥質問であること、公開可否がどこにも無いこと
-check("極性は defect", R.polarity === "defect");
-const allKeys = [...QKEYS, ...R.groups.map((g) => g.key), R.scored.key].join(" ");
-check("公開可否（shippable）が存在しない", !/shippable|公開可否/.test(allKeys + JSON.stringify(R)));
-
 const clean = run({});
 check("欠陥ゼロなら ship", clean.verdict === "ship", clean.verdict);
 check("欠陥ゼロなら clean_ratio = 1", clean.clean_ratio === 1, String(clean.clean_ratio));
+check("interpret が scope を返す", clean.scope === "diagram", clean.scope);
 
 // 極性の向き: probability が高い = 欠陥あり
-const oneDefect = run({ legibility: 0.9 });
-check("probability 0.9 は欠陥と解釈される", oneDefect.defects.includes("legibility"));
+const oneDefect = run({ g2_missing_legend: 0.9 });
+check("probability 0.9 は欠陥と解釈される", oneDefect.defects.includes("g2_missing_legend"));
 check("欠陥1件（群FAILなし）は revise", oneDefect.verdict === "revise", oneDefect.verdict);
 
 // 非 critical の閾値は 0.70
-check("非critical 0.69 は欠陥ではない", run({ legibility: 0.69 }).defects.length === 0);
-check("非critical 0.70 は欠陥", run({ legibility: 0.7 }).defects.includes("legibility"));
+check("非critical 0.69 は欠陥ではない", run({ g2_missing_legend: 0.69 }).defects.length === 0);
+check("非critical 0.70 は欠陥", run({ g2_missing_legend: 0.7 }).defects.includes("g2_missing_legend"));
 
 // critical の閾値は 0.50、かつ単独で群FAIL
-const crit = run({ structure: 0.5 });
-check("critical 0.50 は欠陥", crit.defects.includes("structure"));
+const crit = run({ g3_question_mismatch: 0.5 });
+check("critical 0.50 は欠陥", crit.defects.includes("g3_question_mismatch"));
 check("critical 単独で群FAIL → block", crit.verdict === "block" && crit.failed_groups.includes("g3_text_figure_alignment"), `${crit.verdict} ${crit.failed_groups}`);
-check("critical 0.49 は欠陥ではない", run({ structure: 0.49 }).defects.length === 0);
+check("critical 0.49 は欠陥ではない", run({ g3_question_mismatch: 0.49 }).defects.length === 0);
 
 // group_fail_at = 2
-const twoInGroup = run({ labels: 0.9, legibility: 0.9 });
+const twoInGroup = run({ g2_missing_legend: 0.9, g2_label_data_mismatch: 0.9 });
 check("同一群2件で群FAIL → block", twoInGroup.verdict === "block" && twoInGroup.failed_groups.includes("g2_figure_labeling"), `${twoInGroup.verdict} ${twoInGroup.failed_groups}`);
-const twoAcrossGroups = run({ legibility: 0.9, density: 0.9 });
+const twoAcrossGroups = run({ g2_missing_legend: 0.9, g4_mixed_concerns: 0.9 });
 check("別群1件ずつでは群FAILしない → revise", twoAcrossGroups.verdict === "revise" && twoAcrossGroups.failed_groups.length === 0, `${twoAcrossGroups.verdict} ${twoAcrossGroups.failed_groups}`);
 
+// 差し替え前は g1 が構造上 FAIL しなかった。4問になったので落ちる。
+const g1Fail = run({ g1_omitted_subject: 0.9, g1_vague_deixis: 0.9 });
+check("g1 が2件で群FAILできる（差し替え前は不可能だった）", g1Fail.failed_groups.includes("g1_traceability"), String(g1Fail.failed_groups));
+check("g1 は1件では群FAILしない", !run({ g1_omitted_subject: 0.9 }).failed_groups.includes("g1_traceability"));
+
 // 欠損。無視すると群の欠陥数が実際より少なく数えられ、静かにゲートが緩む。
-const missing = run({}, { omit: ["density"] });
+const missing = run({}, { omit: ["g4_mixed_concerns"] });
 check("回答欠損で verdict は unknown", missing.verdict === "unknown", missing.verdict);
 check("欠損は ship にならない", missing.verdict !== "ship");
-check("missing_answers に欠損キーが入る", missing.missing_answers.includes("density"), String(missing.missing_answers));
-const outOfRange = run({ density: { type: "boolean", probability: 1.5 } });
-check("範囲外の probability は欠損扱い", outOfRange.missing_answers.includes("density") && outOfRange.verdict === "unknown");
-const notANumber = run({ density: { type: "boolean" } });
-check("probability 欠落は欠損扱い", notANumber.missing_answers.includes("density"));
+check("missing_answers に欠損キーが入る", missing.missing_answers.includes("g4_mixed_concerns"), String(missing.missing_answers));
+const outOfRange = run({ g4_mixed_concerns: { type: "boolean", probability: 1.5 } });
+check("範囲外の probability は欠損扱い", outOfRange.missing_answers.includes("g4_mixed_concerns") && outOfRange.verdict === "unknown");
+const notANumber = run({ g4_mixed_concerns: { type: "boolean" } });
+check("probability 欠落は欠損扱い", notANumber.missing_answers.includes("g4_mixed_concerns"));
 
 // s7 は verdict に算入しない（禁止事項 #3）
 const lowS7 = run({ [R.scored.key]: { type: "score", score: 0 } });
@@ -112,7 +224,7 @@ check("score 4 は水準5（5段階の上限）", s7(4).level === 5, String(s7(4
 check("score は小数のまま保持される", s7(2.6).level === 3.6, String(s7(2.6).level));
 check("水準3.6 は閾値4に届かない", s7(2.6).meets_threshold === false);
 check("水準4.0 は閾値4に届く", s7(3).meets_threshold === true, String(s7(3).level));
-check("水準の説明文が付く", typeof s7(4).level_description === "string" && s7(4).level_description.includes("水準5"));
+check("水準の説明文が付く", typeof s7(4).level_description === "string" && s7(4).level_description.length > 0);
 check("範囲外の score（5段階で 5）は読まない", s7(5).level === null, JSON.stringify(s7(5)));
 check("負の score は読まない", s7(-1).level === null);
 check("score の生値は0起点で残る", s7(2.6).raw === 2.6, String(s7(2.6).raw));
@@ -121,16 +233,19 @@ check("score の生値は0起点で残る", s7(2.6).raw === 2.6, String(s7(2.6).
 check("interpret は overall を返さない", !("overall" in clean), JSON.stringify(Object.keys(clean)));
 check("clean_ratio は残っている", typeof clean.clean_ratio === "number");
 
-// R3: 構造上 FAIL しえない群（unreachable）と全問一致が要る群（fragile）を隠さない
-check("FAILしえない群が露出する", clean.unreachable_groups.includes("g1_traceability"), String(clean.unreachable_groups));
-const struct = Object.fromEntries(groupStructure(R).map((g) => [g.key, g]));
-check("g1 は critical なし slack < 0 で unreachable", struct.g1_traceability.slack < 0 && struct.g1_traceability.reachable === false, JSON.stringify(struct.g1_traceability));
-check("g2 は slack 0 で fragile（全問一致が必要）", struct.g2_figure_labeling.slack === 0 && struct.g2_figure_labeling.fragile === true, JSON.stringify(struct.g2_figure_labeling));
-check("g4 も fragile", struct.g4_granularity_flow.fragile === true);
-check("critical を持つ群は fragile にしない", struct.g3_text_figure_alignment.fragile === false && struct.g5_epistemic.fragile === false);
-check("critical を持つ群は reachable", struct.g3_text_figure_alignment.reachable && struct.g5_epistemic.reachable);
-check("unreachable は fragile と重複しない", !clean.fragile_groups.includes("g1_traceability"));
-check("fragile_groups が g2 と g4 を拾う", clean.fragile_groups.length === 2 && clean.fragile_groups.includes("g2_figure_labeling") && clean.fragile_groups.includes("g4_granularity_flow"), String(clean.fragile_groups));
+// R3: 露出用の配列は残す（実ルーブリックでは空になる）
+check("unreachable_groups は空", clean.unreachable_groups.length === 0, String(clean.unreachable_groups));
+check("fragile_groups は空", clean.fragile_groups.length === 0, String(clean.fragile_groups));
+
+// article 側でも同じ判定が効くこと
+const articleAnswers = {};
+for (const q of RA.questions) articleAnswers[q.key] = { type: "boolean", probability: 0.05 };
+articleAnswers[RA.scored.key] = { type: "score", score: 4 };
+const articleClean = interpret(articleAnswers, RA);
+check("article も欠陥ゼロなら ship", articleClean.verdict === "ship", articleClean.verdict);
+check("article の interpret は 18 項目を返す", articleClean.items.length === 18, String(articleClean.items.length));
+const articleCrit = interpret({ ...articleAnswers, g6_no_conclusion_first: { type: "boolean", probability: 0.6 } }, RA);
+check("article の結論先出し欠如は単独で群FAIL", articleCrit.verdict === "block" && articleCrit.failed_groups.includes("g6_article_structure"), `${articleCrit.verdict} ${articleCrit.failed_groups}`);
 
 // R2: エスカレーション。比較は群単位。
 const esc = (p) => evaluateEscalation({ maxRetries: 3, ...p }).escalate;
@@ -146,10 +261,12 @@ check("ship した周はエスカレーションしない", esc({ iteration: 5, 
 check("通った周（FAIL群が空）で stagnation を出さない", !esc({ iteration: 2, verdict: "revise", failedGroups: [], previousFailedGroups: [] }).includes("stagnation"));
 check("unknown でも retry_limit は効く", esc({ iteration: 3, verdict: "unknown", failedGroups: [], previousFailedGroups: [] }).includes("retry_limit"));
 check("理由文が付く", evaluateEscalation({ iteration: 3, verdict: "block", failedGroups: ["g3"], previousFailedGroups: ["g3"] }).reasons.every((r) => typeof r.reason === "string" && r.reason.length > 0));
+check("ルーブリックの max_retries は 3", R.escalation.max_retries === 3 && RA.escalation.max_retries === 3);
 
 // R2: 記録が古くて failed_groups を持たない場合は比較しない（[] と誤読すると oscillation が誤発火する）
 check("failed_groups の無い記録は比較対象にしない", previousFailedGroupsOf({ kind: "review" }) === null);
 check("failed_groups があれば拾う", JSON.stringify(previousFailedGroupsOf({ failed_groups: ["g3"] })) === '["g3"]');
+check("null を渡しても比較対象にしない", previousFailedGroupsOf(null) === null);
 const history = [
   { run_id: "a", kind: "review", iteration: 1, failed_groups: ["g3"] },
   { run_id: "a", kind: "review", iteration: 2, failed_groups: ["g4"] },
@@ -167,20 +284,11 @@ const fixes = fixList(twoInGroup, R);
 check("fixList が欠陥項目を返す", fixes.length === 2, String(fixes.length));
 check("群FAIL中の項目は blocking", fixes.every((f) => f.blocking === true));
 check("群FAILしていない欠陥は blocking でない", fixList(oneDefect, R).every((f) => f.blocking === false));
-check("grounded に「出典を確認せよ」の注記がある", Boolean(R.questions.find((q) => q.key === "grounded")?.means));
+check("fixList に表示名と instructions が入る", fixes.every((f) => f.label && f.instructions));
+const g5Fix = fixList(run({ g5_fabricated_specificity: 0.9 }), R);
+check("g5 の修正指示に「出典を確認せよ」が付く", g5Fix[0]?.means?.includes("出典を確認せよ"), JSON.stringify(g5Fix[0]));
 
-// v0.1 極性のルーブリック誤流用を止める
-const badRubricDir = mkdtempSync(resolve(tmpdir(), "zukai-badrubric-"));
-writeFileSync(resolve(badRubricDir, "jev.rubric.json"), JSON.stringify({ polarity: "quality" }), "utf8");
-let rejected = false;
-try {
-  loadRubric(badRubricDir);
-} catch {
-  rejected = true;
-}
-check("polarity が defect でないルーブリックは拒否される", rejected);
-
-// ── A. MCP 往復 ────────────────────────────────────────────────────────────
+// ── C. MCP 往復 ────────────────────────────────────────────────────────────
 const client = new Client({ name: "zukai-selftest", version: "0.2.0" });
 await client.connect(
   new StdioClientTransport({
@@ -202,14 +310,19 @@ check("jev_gate は廃止されている", !tools.includes("jev_gate"));
 
 const ping = parse(await client.callTool({ name: "jev_ping", arguments: {} }));
 check("自己診断は必ず stub で走る", ping.mode === "stub" && ping.forced_stub === true, `${ping.mode} forced=${ping.forced_stub}`);
-check("ping が極性を返す", ping.rubric.polarity === "defect");
-check("ping が3閾値を返す", ping.rubric.thresholds.probability_threshold === 0.7 && ping.rubric.thresholds.critical_probability_threshold === 0.5 && ping.rubric.thresholds.group_fail_at === 2);
 check("ping が鍵の env 名を返す", ping.key_env === "AI_GATEWAY_API_KEY");
-check("ping が5群を返す", ping.rubric.groups.length === 5, String(ping.rubric.groups.length));
+check("ping が2本のルーブリックを返す", ping.rubrics.length === 2, String(ping.rubrics.length));
+const pingByScope = Object.fromEntries(ping.rubrics.map((r) => [r.scope, r]));
+check("ping が極性を返す", ping.rubrics.every((r) => r.polarity === "defect"));
+check("ping が3閾値を返す", ping.rubrics.every((r) => r.thresholds.probability_threshold === 0.7 && r.thresholds.critical_probability_threshold === 0.5 && r.thresholds.group_fail_at === 2));
+check("ping が質問数を返す（22 / 18）", pingByScope.diagram.question_count === 22 && pingByScope.article.question_count === 18, JSON.stringify(ping.rubrics.map((r) => [r.scope, r.question_count])));
+check("ping が diagram 5群 / article 4群を返す", pingByScope.diagram.groups.length === 5 && pingByScope.article.groups.length === 4);
+check("ping がルーブリックの版を返す", ping.rubrics.every((r) => r.version === "0.4.0"), JSON.stringify(ping.rubrics.map((r) => r.version)));
+check("ping が読み込み元を返す", ping.rubrics.every((r) => typeof r.source === "string" && r.source.startsWith("rubric-")));
 check("ping が較正前だと警告する", ping.warnings.some((w) => w.includes("較正")));
-check("ping が FAILしえない群を警告する", ping.warnings.some((w) => w.includes("g1_traceability")));
-check("ping が全問一致の要る群を警告する", ping.warnings.some((w) => w.includes("全問一致")), JSON.stringify(ping.warnings));
-check("ping の群に slack が入る", ping.rubric.groups.every((g) => typeof g.slack === "number"));
+check("ping が FAILしえない群を警告しない（R1 で解消済み）", !ping.warnings.some((w) => w.includes("FAIL しえない")), JSON.stringify(ping.warnings));
+check("ping が全問一致の要る群を警告しない（R1 で解消済み）", !ping.warnings.some((w) => w.includes("全問一致")), JSON.stringify(ping.warnings));
+check("ping の群に slack が入る", ping.rubrics.every((r) => r.groups.every((g) => typeof g.slack === "number")));
 
 const review = parse(
   await client.callTool({
@@ -223,7 +336,8 @@ const review = parse(
   })
 );
 check("review が verdict を返す", ["ship", "revise", "block", "unknown"].includes(review.verdict), review.verdict);
-check("review が8項目すべてを検査する", review.items.length === 8, String(review.items.length));
+check("review の既定 scope は diagram", review.scope === "diagram", review.scope);
+check("review が22項目すべてを検査する", review.items.length === 22, String(review.items.length));
 check("review が全項目に probability を持つ", review.items.every((i) => typeof i.probability === "number" && i.probability >= 0 && i.probability <= 1));
 check("review が5群を返す", review.groups.length === 5);
 check("review が iteration 1 を付ける", review.iteration === 1);
@@ -231,6 +345,7 @@ check("review の fixes が欠陥数と一致する", review.fixes.length === re
 check("review が人間確認枠を返す", review.human_review.required === true);
 check("review に公開可否が無い", !JSON.stringify(review).includes("shippable"));
 check("review が較正前だと警告する", review.warnings.some((w) => w.includes("較正")));
+check("review が unreachable/fragile を空で返す", review.unreachable_groups.length === 0 && review.fragile_groups.length === 0);
 
 const review2 = parse(
   await client.callTool({
@@ -266,19 +381,44 @@ if (review3.verdict !== "ship") {
   check("3周目で retry_limit も出る", review3.escalate.includes("retry_limit"), JSON.stringify(review3.escalate));
 }
 
-// R3 / R4 を往復でも確認
-check("review が fragile_groups を返す", Array.isArray(review.fragile_groups) && review.fragile_groups.length === 2, JSON.stringify(review.fragile_groups));
-check("review に overall が無い", !("overall" in review) && !JSON.stringify(review).includes('"overall"'));
+// scope=article。別のアーティファクトなので別の run になる。
+const articleReview = parse(
+  await client.callTool({
+    name: "jev_review",
+    arguments: {
+      task: "受注から出荷までを内製で回すか外注するかを判断できるようにする記事",
+      artifact_path: "sample-article.md",
+      scope: "article",
+      source_material: "外注は固定費、内製は件数比例。分岐点は月200件。繁忙期の人員確保が前提。",
+      note: "初版",
+    },
+  })
+);
+check("article の review が通る", ["ship", "revise", "block", "unknown"].includes(articleReview.verdict), articleReview.verdict);
+check("article の review は 18 項目", articleReview.items.length === 18, String(articleReview.items.length));
+check("article の review は4群", articleReview.groups.length === 4, String(articleReview.groups.length));
+check("article の review に g6 が入る", articleReview.groups.some((g) => g.key === "g6_article_structure"));
+check("article の review に g2/g3 は入らない", !articleReview.groups.some((g) => g.key === "g2_figure_labeling" || g.key === "g3_text_figure_alignment"));
+check("article は別の run になる", articleReview.run_id !== review.run_id && articleReview.iteration === 1);
+check("review が scope を返す", articleReview.scope === "article", articleReview.scope);
+
+const badScope = await client.callTool({
+  name: "jev_review",
+  arguments: { task: "x", artifact_path: "sample.html", scope: "poster" },
+});
+check("未知の scope は拒否される", badScope.isError === true);
 
 const feed = parse(await client.callTool({ name: "jev_feed", arguments: { since_seq: 0 } }));
-check("feed が全件返す", feed.records.length === 3, String(feed.records.length));
-check("feed がカーソルを進める", feed.next_since_seq === 3, String(feed.next_since_seq));
+check("feed が全件返す", feed.records.length === 4, String(feed.records.length));
+check("feed がカーソルを進める", feed.next_since_seq === 4, String(feed.next_since_seq));
 check("feed のレコードに群が入る", Array.isArray(feed.records[0].groups));
-const tail = parse(await client.callTool({ name: "jev_feed", arguments: { since_seq: 2 } }));
+check("feed のレコードに scope が入る", feed.records.every((r) => typeof r.scope === "string"), JSON.stringify(feed.records.map((r) => r.scope)));
+check("feed のレコードにルーブリックの版が入る", feed.records.every((r) => r.rubric_version === "0.4.0"));
+const tail = parse(await client.callTool({ name: "jev_feed", arguments: { since_seq: 3 } }));
 check("feed が since_seq を尊重する", tail.records.length === 1);
 
 const status = parse(await client.callTool({ name: "jev_status", arguments: {} }));
-check("status が評価数を数える", status.total_evaluations === 3, String(status.total_evaluations));
+check("status が評価数を数える", status.total_evaluations === 4, String(status.total_evaluations));
 check("status がラン後に idle に戻る", status.state.status === "idle", status.state.status);
 check("status に overall が残っていない", !JSON.stringify(status).includes("overall"));
 check("status が clean_ratio を集計する", status.runs.every((r) => "last_clean_ratio" in r), JSON.stringify(status.runs));

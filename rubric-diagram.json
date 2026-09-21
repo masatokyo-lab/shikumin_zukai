@@ -1,0 +1,181 @@
+{
+  "rubric_version": "0.4.0",
+  "scope": "diagram",
+  "updated": "2026-09-20",
+  "polarity": "defect",
+  "polarity_note": "全ての boolean 質問は『欠陥が存在するか』を問う。value=true は欠陥あり=FAIL。v0.1(virtue polarity)とは真逆なので、コードを流用する場合は必ず反転すること。",
+  "figure_format": "svg",
+  "figure_format_note": "図はSVGソースをテキストとしてstateに含めること。PNG/JPEGでは群2・群3が評価不能になる。JPG/PNGが必要な場合はSVGから変換する。",
+  "scoring": {
+    "probability_threshold": 0.7,
+    "critical_probability_threshold": 0.5,
+    "group_fail_at": 2,
+    "rationale": "20問を独立したハードゲートにすると誤検出で常時FAILする。閾値と群判定で実効ゲート数を約6に下げる。",
+    "threshold_semantics": "boolean は probability(P(true)) を直接閾値と比較する。value フィールドは存在しない。"
+  },
+  "groups": {
+    "g1_traceability": {
+      "label": "コンテキスト品質（情報のトレーサビリティ）",
+      "questions": {
+        "g1_omitted_subject": {
+          "type": "boolean",
+          "instructions": "主語・目的語・対象が省略され、直前の文脈だけでは何を指しているか特定できない箇所があるか。"
+        },
+        "g1_vague_deixis": {
+          "type": "boolean",
+          "instructions": "「これ」「それ」「上記」などの指示語が過剰に使われ、参照先が曖昧な箇所があるか。"
+        },
+        "g1_unexplained_topic_shift": {
+          "type": "boolean",
+          "instructions": "情報の追加や話題の切り替えに対して、なぜその話がここで出てくるのかが追えない箇所があるか。"
+        },
+        "g1_requires_backtracking": {
+          "type": "boolean",
+          "instructions": "結論に至るまでに、読者が前の文章へ戻って参照しないと理解できない構成になっているか。"
+        }
+      }
+    },
+    "g2_figure_labeling": {
+      "label": "図のタイトル・軸・単位",
+      "questions": {
+        "g2_no_title": {
+          "type": "boolean",
+          "critical": true,
+          "instructions": "図の目的を説明するタイトルが無いか。"
+        },
+        "g2_axis_meaning_unclear": {
+          "type": "boolean",
+          "critical": true,
+          "instructions": "X軸・Y軸の意味が明示されていないか。"
+        },
+        "g2_missing_unit": {
+          "type": "boolean",
+          "critical": true,
+          "instructions": "数値に単位が必要であるにもかかわらず記載されていないか。"
+        },
+        "g2_label_data_mismatch": {
+          "type": "boolean",
+          "instructions": "軸ラベルと、実際に表示されているデータの意味が一致していないか。"
+        },
+        "g2_misleading_scale": {
+          "type": "boolean",
+          "instructions": "軸の間隔やスケールが、データの比較を誤解させる形になっているか。"
+        },
+        "g2_missing_legend": {
+          "type": "boolean",
+          "instructions": "凡例が必要であるにもかかわらず無いか。"
+        }
+      }
+    },
+    "g3_text_figure_alignment": {
+      "label": "コンテキストと図の整合性",
+      "questions": {
+        "g3_question_mismatch": {
+          "type": "boolean",
+          "critical": true,
+          "instructions": "本文で説明している問いと、図が表している情報が一致していないか。"
+        },
+        "g3_wrong_chart_type": {
+          "type": "boolean",
+          "instructions": "本文が比較を目的としているのに、比較に適さない図を使っているか。"
+        },
+        "g3_missing_time_axis": {
+          "type": "boolean",
+          "critical": true,
+          "instructions": "本文が時間変化を説明しているのに、図に時間軸が無いか。"
+        },
+        "g3_granularity_gap": {
+          "type": "boolean",
+          "instructions": "図の情報量が、本文の説明粒度に対して過剰または不足しているか。"
+        },
+        "g3_figure_not_supporting": {
+          "type": "boolean",
+          "instructions": "図だけを見て、本文の主張を補強できない状態になっているか。"
+        }
+      }
+    },
+    "g4_granularity_flow": {
+      "label": "粒度バランス",
+      "questions": {
+        "g4_opening_too_abstract": {
+          "type": "boolean",
+          "instructions": "読者が持っている情報量に対して、最初の問いが抽象的すぎるか。"
+        },
+        "g4_premise_skipped": {
+          "type": "boolean",
+          "instructions": "必要な前提を提示する前に、結論レベルの大きな問いを投げているか。"
+        },
+        "g4_question_info_mismatch": {
+          "type": "boolean",
+          "instructions": "追加された情報と、それに対する問いの粒度が合っていないか。"
+        },
+        "g4_mixed_concerns": {
+          "type": "boolean",
+          "instructions": "一つの問いに、複数の異なる論点が混在しているか。"
+        },
+        "g4_abrupt_abstraction_jump": {
+          "type": "boolean",
+          "instructions": "説明の途中で、抽象度が段階を踏まずに大きく変化する箇所があるか。"
+        }
+      }
+    },
+    "g5_epistemic": {
+      "label": "事実と推測の区別（v0.1 r3 を継承）",
+      "questions": {
+        "g5_unmarked_speculation": {
+          "type": "boolean",
+          "critical": true,
+          "instructions": "裏付けのない記述が、推測であることを示さずに事実として断定されているか。"
+        },
+        "g5_fabricated_specificity": {
+          "type": "boolean",
+          "critical": true,
+          "instructions": "出典が示されないまま、具体的な数値・製品名・日付が確定情報のように書かれているか。"
+        }
+      }
+    }
+  },
+  "scored": {
+    "s7_originality": {
+      "type": "score",
+      "threshold": 4,
+      "human_review_required": true,
+      "instructions": "組み込み・低レイヤの一次経験に裏打ちされた内容か。1=どのAIでも書ける一般論、3=調べれば書ける、5=実務経験がないと書けない。",
+      "blind_spot": "Jevは具体性の手触りしか見ておらず、記述が実体験に基づくかを検証できない。もっともらしい捏造を通過させる。人間の目視が必須。",
+      "criteria": [
+        "どのAIでも書ける一般論",
+        "調べれば書ける範囲の情報",
+        "調べた上で整理・構造化されている",
+        "実務経験がないと書けない具体性がある",
+        "当事者しか知り得ない詳細が含まれる"
+      ],
+      "threshold_note": "score の返り値の下限が1か0かは未検証。probe.mjs の出力で確認して調整すること。"
+    }
+  },
+  "removed_from_v01": {
+    "s8_density": "g4_granularity_flow と重複するため削除。g4 は『何が起きたらFAILか』で書かれており判定が安定する。"
+  },
+  "escalation": {
+    "max_retries": 3,
+    "compare_at": "group",
+    "compare_at_note": "停滞・振動の判定は20項目ではなく群(5個)の単位で行う。項目単位だと誤検出で毎回集合が変わり、oscillation が常時発火する。修正指示には項目単位のIDを使う。",
+    "triggers": [
+      {
+        "id": "retry_limit",
+        "condition": "retry_count >= 3"
+      },
+      {
+        "id": "stagnation",
+        "condition": "FAIL群の集合が前回と同一"
+      },
+      {
+        "id": "oscillation",
+        "condition": "前回になかったFAIL群が出現"
+      }
+    ]
+  },
+  "changelog": {
+    "0.3.0": "s7_originality の対象領域から医療機器開発を削除し、組み込み・低レイヤに限定。instructions の変更は判定を変えるため、0.2.0 の較正結果とは比較不可。",
+    "0.4.0": "実API仕様に合わせて修正。boolean の答えは value ではなく probability(P(true)) のみ。score は scale ではなく criteria(水準説明の配列)。AI SDK 7 以降が必要。"
+  }
+}

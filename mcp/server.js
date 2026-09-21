@@ -19,7 +19,16 @@ import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, relative, isAbsolute } from "node:path";
 
 import { callJev, describeClient, MODE } from "./jev.js";
-import { loadRubric, buildQuestions, interpret, fixList, groupStructure } from "./rubric.js";
+import {
+  loadRubric,
+  loadAllRubrics,
+  buildQuestions,
+  interpret,
+  fixList,
+  groupStructure,
+  SCOPES,
+  DEFAULT_SCOPE,
+} from "./rubric.js";
 import { evaluateEscalation, previousReview, previousFailedGroupsOf } from "./escalation.js";
 import * as store from "./store.js";
 
@@ -27,7 +36,8 @@ const REPO_ROOT = resolve(process.env.ZUKAI_REPO_ROOT || process.cwd());
 const MAX_CONTENT = Number(process.env.ZUKAI_MAX_CONTENT || 60000);
 
 const CALIBRATION_WARNING =
-  "閾値 0.70 / 0.50 / group_fail_at=2 は較正前の暫定値。較正が済むまで、この判定を品質の根拠にしないこと（HANDOFF 禁止事項 #6）。";
+  "ルーブリックの閾値は較正前の暫定値（HANDOFF 3.3「0.70 と 0.50 に根拠はない」）。" +
+  "samples.json と較正が済むまで、この判定を品質の根拠にしないこと（HANDOFF 禁止事項 #6）。";
 const STUB_WARNING = "stub モードの結果。スコアは決定論的なダミーで、品質判断には使えない。";
 
 function readArtifact(artifactPath, inlineContent) {
@@ -43,18 +53,34 @@ function readArtifact(artifactPath, inlineContent) {
 }
 
 // 図は SVG ソースをテキストとして state に含める（HANDOFF 3.4: 画像は評価できない）。
-function buildState({ task, sourceMaterial, artifact, note }) {
+const STATE_HEADINGS = {
+  diagram: {
+    task: "# この図解が説明すべき仕組み（依頼内容）",
+    source: "# 元資料（図解の主張はここで裏付けられている必要がある）",
+    fallback: "(提供なし。資料に無い断定が無いかは、依頼内容のみを基準に判断すること)",
+    body: "図解アーティファクト",
+  },
+  article: {
+    task: "# この文章が答えるべき問い（依頼内容）",
+    source: "# 元資料（本文の主張はここで裏付けられている必要がある）",
+    fallback: "(提供なし。資料に無い断定が無いかは、依頼内容のみを基準に判断すること)",
+    body: "記事原稿",
+  },
+};
+
+function buildState({ task, sourceMaterial, artifact, note, scope }) {
+  const h = STATE_HEADINGS[scope] || STATE_HEADINGS.diagram;
   const truncated = artifact.content.length > MAX_CONTENT;
   const body = truncated ? artifact.content.slice(0, MAX_CONTENT) : artifact.content;
   return [
-    "# この図解が説明すべき仕組み（依頼内容）",
+    h.task,
     task,
     "",
-    "# 元資料（図解の主張はここで裏付けられている必要がある）",
-    sourceMaterial?.trim() || "(提供なし。資料に無い断定が無いかは、依頼内容のみを基準に判断すること)",
+    h.source,
+    sourceMaterial?.trim() || h.fallback,
     "",
     note ? `# 今回の変更点\n${note}\n` : "",
-    `# 図解アーティファクト (${artifact.path}, ${artifact.bytes} bytes${truncated ? ", 先頭のみ" : ""})`,
+    `# ${h.body} (${artifact.path}, ${artifact.bytes} bytes${truncated ? ", 先頭のみ" : ""})`,
     body,
   ]
     .filter((s) => s !== "")
@@ -85,28 +111,43 @@ server.registerTool(
   {
     title: "Jev 接続確認",
     description:
-      "Jev への接続モード（live / stub）、モデル、極性、閾値、群構成を返す。stub の場合その評価は偽物なので、必ず最初に確認すること。",
+      "Jev への接続モード（live / stub）、モデル、極性、そして diagram / article 両方のルーブリック" +
+      "（版・質問数・閾値・群構成）を返す。stub の場合その評価は偽物なので、必ず最初に確認すること。",
     inputSchema: {},
   },
   async () => {
-    let rubric;
+    let rubrics;
     try {
-      rubric = loadRubric(REPO_ROOT);
+      // 両方の scope を毎回読む。片方しか見ないと、記事用ルーブリックが壊れていても
+      // 図解の ping が通って「基準は健全」に見えてしまう。
+      rubrics = loadAllRubrics(REPO_ROOT);
     } catch (e) {
       return fail(e);
     }
-    const groups = groupStructure(rubric);
-    const unreachable = groups.filter((g) => !g.reachable).map((g) => g.key);
-    const fragile = groups.filter((g) => g.fragile).map((g) => g.key);
-    return ok({
-      ...describeClient(),
-      repo_root: REPO_ROOT,
-      rubric: {
-        profile: rubric.profile,
-        source: rubric.source || "built-in",
+    const warnings = [
+      MODE === "stub" ? `APIキー（AI_GATEWAY_API_KEY）が無いため stub モード。${STUB_WARNING}` : null,
+    ];
+    const described = rubrics.map((rubric) => {
+      const groups = groupStructure(rubric);
+      const unreachable = groups.filter((g) => !g.reachable).map((g) => g.key);
+      const fragile = groups.filter((g) => g.fragile).map((g) => g.key);
+      if (!rubric.thresholds.calibrated) warnings.push(`${rubric.scope}: ${CALIBRATION_WARNING}`);
+      if (unreachable.length)
+        warnings.push(
+          `${rubric.scope}: 構造上 FAIL しえない群がある: ${unreachable.join(", ")}。critical が無く、質問数が group_fail_at に届かない。ルーブリック再設計で解消すること。`
+        );
+      if (fragile.length)
+        warnings.push(
+          `${rubric.scope}: FAIL に全問一致が必要な群がある: ${fragile.join(", ")}。critical が無く slack が 0 なので、1件の欠陥では落ちない。実質的にはほぼ到達しない。`
+        );
+      return {
+        scope: rubric.scope,
+        note: rubric.scope_note,
+        version: rubric.version,
+        source: rubric.source,
+        source_origin: rubric.source_origin,
         polarity: rubric.polarity,
-        polarity_note:
-          "probability は「欠陥が存在する確率」。高いほど悪い。閾値以上で欠陥ありと判定する。",
+        question_count: rubric.questions.length,
         thresholds: rubric.thresholds,
         groups,
         scored: {
@@ -114,17 +155,18 @@ server.registerTool(
           threshold: rubric.scored.threshold,
           human_review_required: rubric.scored.human_review_required,
         },
-      },
-      warnings: [
-        MODE === "stub" ? `APIキー（AI_GATEWAY_API_KEY）が無いため stub モード。${STUB_WARNING}` : null,
-        rubric.thresholds.calibrated ? null : CALIBRATION_WARNING,
-        unreachable.length
-          ? `構造上 FAIL しえない群がある: ${unreachable.join(", ")}。critical が無く、質問数が group_fail_at に届かない。ルーブリック再設計で解消すること。`
-          : null,
-        fragile.length
-          ? `FAIL に全問一致が必要な群がある: ${fragile.join(", ")}。critical が無く slack が 0 なので、1件の欠陥では落ちない。実質的にはほぼ到達しない。`
-          : null,
-      ].filter(Boolean),
+        escalation: rubric.escalation,
+      };
+    });
+    return ok({
+      ...describeClient(),
+      repo_root: REPO_ROOT,
+      scopes: SCOPES,
+      default_scope: DEFAULT_SCOPE,
+      polarity_note:
+        "probability は「欠陥が存在する確率」。高いほど悪い。閾値以上で欠陥ありと判定する。",
+      rubrics: described,
+      warnings: warnings.filter(Boolean),
     });
   }
 );
@@ -135,26 +177,35 @@ server.registerTool(
   {
     title: "図解をレビューする",
     description:
-      "図解アーティファクトを欠陥ルーブリック全項目で検査し、群単位の判定と修正項目リストを返す。" +
-      "群は トレーサビリティ / 図のラベリング / 本文と図の整合 / 粒度と流れ / 認識の妥当性 の5つ。" +
+      "図解または記事を欠陥ルーブリック全項目で検査し、群単位の判定と修正項目リストを返す。" +
+      "scope=diagram（既定）は図解用の22問（g1 トレーサビリティ / g2 図のタイトル・軸・単位 / " +
+      "g3 本文と図の整合 / g4 粒度バランス / g5 事実と推測の区別）、" +
+      "scope=article は図を伴わない文章用の18問（g1 / g4 / g5 / g6 記事としての構成）。" +
       "critical 項目は単独で群FAIL、それ以外は群内2件以上で群FAIL。" +
       "s7_originality（一次経験の裏打ち）は判定に算入せず、人間確認の対象として別枠で返る。" +
       "反復の停滞・振動はサーバー側で判定し escalate に入れて返すので、" +
       "空でなければ回すのをやめて人間に返すこと。" +
       "結果は .jev/runs.jsonl に記録される。",
     inputSchema: {
-      task: z.string().describe("この図解が説明すべき仕組み。依頼内容をそのまま。"),
+      task: z.string().describe("この図解／記事が説明すべき仕組み・答えるべき問い。依頼内容をそのまま。"),
+      scope: z
+        .enum(["diagram", "article"])
+        .optional()
+        .describe(
+          "対象の種類。図を含むアーティファクトは diagram（既定）、図を伴わない文章は article。" +
+            "取り違えると、図の無い文章に軸・単位の質問を当てて空振りする（HANDOFF 3.1）。"
+        ),
       artifact_path: z.string().optional().describe("リポジトリ相対のアーティファクトパス。"),
       content: z.string().optional().describe("パスの代わりに中身を直接渡す場合。"),
       source_material: z
         .string()
         .optional()
-        .describe("図解の元になった資料。裏付け判定（grounded）に使う。省くと効かない。"),
+        .describe("元になった資料。裏付け判定（g5 群）に使う。省くと効かない。"),
       note: z.string().optional().describe("前回からの変更点。反復の記録に残る。"),
       run_id: z.string().optional().describe("反復をまとめる ID。省略時は自動。"),
     },
   },
-  async ({ task, artifact_path, content, source_material, note, run_id }) => {
+  async ({ task, artifact_path, content, source_material, note, run_id, scope }) => {
     let artifact;
     try {
       artifact = readArtifact(artifact_path, content);
@@ -171,19 +222,30 @@ server.registerTool(
       iteration,
     });
     try {
-      const rubric = loadRubric(REPO_ROOT);
-      const state = buildState({ task, sourceMaterial: source_material, artifact, note });
+      const rubric = loadRubric(REPO_ROOT, scope || DEFAULT_SCOPE);
+      const state = buildState({
+        task,
+        sourceMaterial: source_material,
+        artifact,
+        note,
+        scope: rubric.scope,
+      });
       const res = await callJev(state, buildQuestions(rubric));
       const result = interpret(res.answers, rubric);
       const fixes = fixList(result, rubric);
       // エスカレーションはサーバーが計算する。呼び出し側に履歴の突き合わせを任せると、
       // 忘れた瞬間に静かに発火しなくなる（HANDOFF 2.3）。
       const prev = previousReview(store.readAll(REPO_ROOT), runId, iteration);
+      // scope が変われば群の集合そのものが変わる（article には g6 があり g2/g3 が無い）。
+      // 別のルーブリックの FAIL群 と突き合わせると oscillation が誤発火するので比較しない。
+      const comparablePrev = prev && (prev.scope ?? DEFAULT_SCOPE) === rubric.scope ? prev : null;
       const escalation = evaluateEscalation({
         iteration,
         verdict: result.verdict,
         failedGroups: result.failed_groups,
-        previousFailedGroups: previousFailedGroupsOf(prev),
+        previousFailedGroups: previousFailedGroupsOf(comparablePrev),
+        // 上限もルーブリック側の値に従う（HANDOFF 2.3 は3回）。
+        maxRetries: rubric.escalation.max_retries,
       });
       const record = store.append(REPO_ROOT, {
         kind: "review",
@@ -192,6 +254,9 @@ server.registerTool(
         artifact: artifact.path,
         task,
         note: note || null,
+        scope: rubric.scope,
+        rubric_version: rubric.version,
+        rubric_source: rubric.source,
         mode: res.mode,
         model: res.model,
         latency_ms: res.latency_ms,
@@ -230,6 +295,9 @@ server.registerTool(
         run_id: runId,
         iteration,
         mode: res.mode,
+        scope: rubric.scope,
+        rubric_version: rubric.version,
+        question_count: rubric.questions.length,
         polarity: result.polarity,
         verdict: result.verdict,
         clean_ratio: result.clean_ratio,
