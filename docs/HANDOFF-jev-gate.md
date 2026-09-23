@@ -298,7 +298,7 @@ claude mcp add jev-gate -- node "$(pwd)/jev-gate-server.mjs"
 
 | # | 項目 | 状態 |
 |---|---|---|
-| 1 | probe.mjs の実行結果 | **未実行。**score の下限がここで確定する |
+| 1 | probe.mjs の実行結果 | **対応済み（2026-09-23、Vercel 経由）。**score は 0 起点で確定 |
 | 2 | 閾値 0.70 / 0.50 の妥当性 | 較正待ち |
 | 3 | `rubric-article.json` の critical 指定 | 現在 `g6_no_conclusion_first` と g5 の4問のみ。増減は本人判断待ち |
 | 4 | g2/g3 用の SVG 境界事例 | 未作成。意図的に軸をずらした図と本文のペアが必要 |
@@ -351,6 +351,21 @@ claude mcp add jev-gate -- node "$(pwd)/jev-gate-server.mjs"
 確認できたのは、SDK が `https://ai-gateway.vercel.sh/v4/ai/evaluation-model` へ送ること
 （5.1 の「Vercel AI Gateway 経由」は正しい）と、失敗が PASS に倒れず `isError` で落ちること。
 
+**2026-09-23 に解消した。** 手元の実行環境は変わらず egress で塞がれたままだが、このリポジトリを
+Vercel にデプロイし（`api/probe.js`、CLI と同じ `mcp/probe-core.js` を呼ぶ）、ブラウザから実行した。
+実キーで疎通し、契約どおりの形で返ってきたことを確認：
+
+- `mode: "live"`、`key_present: true`、`forced_stub: false`
+- boolean は `type:'boolean'` + `probability`（`value` フィールドなし）
+- score は `type:'score'` + `score` フィールド、0起点 `[0, 4]` の範囲に収まる（A節の型定義からの推測が実測で裏付けられた）
+- レイテンシ 858ms
+
+初回は `AI Gateway requires a valid credit card on file to service requests` で失敗した。
+無料クレジットの解放にもカード登録が必須という 5.1 の記載どおりで、登録後に通った。
+極性の向き（`ungrounded_number` vs `contains_svg` の probability 比較）は未記録。
+8章 #1 は解消。5.2「score の返り値の下限」は実測でも 0 起点と確定。
+一致度・較正済みの確信度は依然未検証（7章 C-6 待ち）。
+
 ## B. 原文の記述ミスと判断したもの
 
 | 箇所 | 原文 | 実体 |
@@ -369,7 +384,7 @@ claude mcp add jev-gate -- node "$(pwd)/jev-gate-server.mjs"
 | 4 | ~~3.1: `g6_article_structure`（記事構造）~~ | **対応済み。** `rubric-article.json` に5問。`scope: "article"` で有効になる |
 | 5 | ~~2.3: `stagnation` / `oscillation` の群単位検出~~ | **対応済み。** `mcp/escalation.js` がサーバー側で群単位に判定し、`jev_review` が `escalate` / `escalation_reasons` で返す |
 | 6 | 7章: `samples.json` と `calibrate` | **未着手。閾値 0.70 / 0.50 / 2 は根拠のない初期値のまま。** 6章「順序の原則」に対して配線が先行している状態は解消していない |
-| 7 | 5.2 / 8章 #1: probe を通す | **未達。** 実行環境の egress が `ai-gateway.vercel.sh` を遮断しており到達できない（A 節末尾） |
+| 7 | 5.2 / 8章 #1: probe を通す | **対応済み。** 手元の実行環境は egress で塞がれたままだが、Vercel 上に同じ検査（`api/probe.js`）を用意して 2026-09-23 に実キーで通した（A 節末尾） |
 
 ### ルーブリック差し替えで判明したこと
 
