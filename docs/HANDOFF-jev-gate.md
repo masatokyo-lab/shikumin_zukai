@@ -383,7 +383,7 @@ Vercel にデプロイし（`api/probe.js`、CLI と同じ `mcp/probe-core.js` �
 | 3 | ~~3.3: `group_fail_at = 2`~~ | **対応済み。** 縮退は解消。両ルーブリックとも `unreachable` / `fragile` はゼロで、g1 も2件の欠陥で落ちる。報告経路（`unreachable_groups` / `fragile_groups`）は較正でいじったときの再発検出用に残してある |
 | 4 | ~~3.1: `g6_article_structure`（記事構造）~~ | **対応済み。** `rubric-article.json` に5問。`scope: "article"` で有効になる |
 | 5 | ~~2.3: `stagnation` / `oscillation` の群単位検出~~ | **対応済み。** `mcp/escalation.js` がサーバー側で群単位に判定し、`jev_review` が `escalate` / `escalation_reasons` で返す |
-| 6 | 7章: `samples.json` と `calibrate` | **未着手。閾値 0.70 / 0.50 / 2 は根拠のない初期値のまま。** 6章「順序の原則」に対して配線が先行している状態は解消していない |
+| 6 | 7章: `samples.json` と `calibrate` | **仕組みは実装済み、サンプル待ち。** `mcp/calibrate-core.js` が `interpret` をそのまま呼んでスイープする（Drive の `calibrate.js` は本体と判定が3点食い違うため不採用。理由はファイル冒頭）。Jev 呼び出しは Vercel の `/api/calibrate`、スイープは `npm run calibrate -- --from` で再現できる。**7.4 の差し戻し版の実物が Drive に無く、`samples.json` は未作成。閾値 0.70 / 0.50 / 2 は根拠のない初期値のまま** |
 | 7 | 5.2 / 8章 #1: probe を通す | **対応済み。** 手元の実行環境は egress で塞がれたままだが、Vercel 上に同じ検査（`api/probe.js`）を用意して 2026-09-23 に実キーで通した（A 節末尾） |
 
 ### ルーブリック差し替えで判明したこと
