@@ -447,5 +447,95 @@ check("リポジトリ外のパスは拒否される", traversal.isError === tru
 
 await client.close();
 
+// ── D. 較正（HANDOFF 7章）。Jev を呼ばず、作った回答で集計ロジックを検査する ─────────
+console.log("\nD. 較正");
+{
+  const cal = await import("./calibrate-core.js");
+  const rubric = loadRubric(pkgRoot, "diagram");
+  const nonCrit = (g) => rubric.questions.filter((q) => q.group === g && !q.critical).map((q) => q.key);
+  // 全問 0.1（critical 閾値 0.5 未満）を土台に、指定の質問だけ上げる。
+  const answersWith = (hi = {}, { drop = null, s7 = 3 } = {}) => {
+    const a = {};
+    for (const q of rubric.questions) if (q.key !== drop) a[q.key] = { type: "boolean", probability: hi[q.key] ?? 0.1 };
+    a[rubric.scored.key] = { type: "score", score: s7 };
+    return a;
+  };
+  const [g2a, g2b] = nonCrit("g2_figure_labeling");
+  const [g4a, g4b] = nonCrit("g4_granularity_flow");
+  check("較正用に非 critical の質問が g2 / g4 に2問ずつある", g2a && g2b && g4a && g4b);
+
+  const clean = answersWith();
+  check("欠陥なし → pass", cal.judgeAt(clean, rubric, 0.7).jev === "pass");
+  const twoG2 = answersWith({ [g2a]: 0.75, [g2b]: 0.75 });
+  check("同じ群で2件 0.75 → 閾値 0.7 で fail", cal.judgeAt(twoG2, rubric, 0.7).jev === "fail");
+  check("同じ群で2件 0.75 → 閾値 0.8 で pass", cal.judgeAt(twoG2, rubric, 0.8).jev === "pass");
+  check("欠陥1件（群FAIL なし＝revise）は pass に対応づく", cal.judgeAt(answersWith({ [g2a]: 0.9 }), rubric, 0.7).jev === "pass");
+  check("回答欠落 → unknown（pass に倒さない）", cal.judgeAt(answersWith({}, { drop: g2a }), rubric, 0.7).jev === "unknown");
+  // Drive 版 calibrate.js は s7 の score を verdict に入れ、しかも 0 起点のまま 4 と比べていた。
+  check("s7 が最低点でも verdict は落ちない（s7 は人間確認の別枠）", cal.judgeAt(answersWith({}, { s7: 0 }), rubric, 0.7).jev === "pass");
+
+  const svg = "<svg><text>x</text></svg>";
+  const samples = [
+    { id: "A", scope: "diagram", task: "t", content: svg, human_verdict: "fail", target_group: "g2_figure_labeling", boundary: true },
+    { id: "B", scope: "diagram", task: "t", content: svg, human_verdict: "pass" },
+    { id: "C", scope: "diagram", task: "t", content: svg, human_verdict: "pass" },
+  ];
+  const evals = [
+    { id: "A", scope: "diagram", rubric_version: rubric.version, mode: "live", answers: twoG2 },
+    { id: "B", scope: "diagram", rubric_version: rubric.version, mode: "live", answers: answersWith({ [g4a]: 0.65, [g4b]: 0.65 }) },
+    { id: "C", scope: "diagram", rubric_version: rubric.version, mode: "stub", answers: twoG2 },
+  ];
+  const rep = cal.buildReport(samples, evals, { repoRoot: pkgRoot }).scopes.diagram;
+  const at = (th) => rep.threshold_sweep.find((s) => s.threshold === th);
+  check("stub の回答は集計から外す", rep.n === 2 && rep.warnings.some((w) => /stub/.test(w)));
+  check("閾値 0.6 以下では B を過剰に落とす", at(0.5).too_strict === 1 && at(0.6).too_strict === 1);
+  check("閾値 0.8 以上では A を見逃す", at(0.8).too_lenient === 1 && at(0.9).too_lenient === 1);
+  check("一致率最大の 0.7 を採用する", rep.chosen_threshold === 0.7 && rep.agreement_rate === 1, JSON.stringify(rep.threshold_sweep));
+  check("意図した群で落ちたかを見る", rep.rows.find((r) => r.id === "A").caught_intended === true);
+  check("境界事例の一致率を出す", rep.boundary_agreement === 1);
+  check("s7 / critical / group_fail_at が較正対象外だと明記する", rep.not_calibrated.length === 3);
+
+  const tie = cal.buildReport(samples.slice(1, 2), evals.slice(1, 2), { repoRoot: pkgRoot }).scopes.diagram;
+  check("同点なら現行値に近い閾値を選び、同点を警告する", tie.chosen_threshold === 0.7 && tie.warnings.some((w) => /同点/.test(w)), JSON.stringify(tie.threshold_sweep));
+
+  const round = cal.expandEvaluations(cal.compactEvaluations(evals));
+  check(
+    "貼り戻し用 JSON を戻しても判定が変わらない",
+    round.every((e, i) => cal.judgeAt(e.answers, rubric, 0.7).jev === cal.judgeAt(evals[i].answers, rubric, 0.7).jev) &&
+      round[0].answers[rubric.scored.key].score === 3
+  );
+
+  const bad = cal.validateSamples(
+    [
+      { id: "x", scope: "poster", task: "t", content: "c", human_verdict: "fail" },
+      { id: "x", scope: "diagram", task: "t", content: "c", human_verdict: "maybe" },
+      { id: "y", scope: "diagram", task: "t", content: "c", human_verdict: "fail", target_group: "g6_article_structure" },
+      { id: "z", scope: "diagram", task: "t", content: "x".repeat(70000), human_verdict: "fail" },
+    ],
+    pkgRoot
+  );
+  check("未知の scope を弾く", bad.errors.some((e) => /x: scope/.test(e)));
+  check("id の重複を弾く", bad.errors.some((e) => /重複/.test(e)));
+  check("human_verdict の値を検査する", bad.errors.some((e) => /human_verdict/.test(e)));
+  check("別ルーブリックの群を target_group に書くと弾く", bad.errors.some((e) => /g6_article_structure/.test(e)));
+  check("長すぎる content は切り詰めずに弾く", bad.errors.some((e) => /z: content が/.test(e)));
+  check("pass が0件なら警告する", bad.warnings.some((w) => /pass が0件/.test(w)));
+
+  const { default: calibrateApi } = await import("../api/calibrate.js");
+  const call = async (env, path) => {
+    const saved = process.env.PROBE_TOKEN;
+    if (env === undefined) delete process.env.PROBE_TOKEN;
+    else process.env.PROBE_TOKEN = env;
+    const res = { statusCode: 0, headers: {}, body: "", setHeader(k, v) { this.headers[k] = v; }, end(b) { this.body = b; } };
+    await calibrateApi({ url: path, headers: { host: "t" } }, res);
+    if (saved === undefined) delete process.env.PROBE_TOKEN;
+    else process.env.PROBE_TOKEN = saved;
+    return res;
+  };
+  check("PROBE_TOKEN 未設定なら /api/calibrate は実行しない", (await call(undefined, "/api/calibrate")).statusCode === 403);
+  check("token 違いは 401", (await call("s", "/api/calibrate?token=x")).statusCode === 401);
+  check("stub では較正しない", (await call("s", "/api/calibrate?token=s")).statusCode === 503);
+}
+
 console.log(fails.length ? `\n${fails.length} failed: ${fails.join(", ")}` : `\nall ok — ${"mode="}${ping.mode}`);
 process.exit(fails.length ? 1 : 0);

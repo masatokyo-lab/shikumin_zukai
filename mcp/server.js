@@ -31,9 +31,9 @@ import {
 } from "./rubric.js";
 import { evaluateEscalation, previousReview, previousFailedGroupsOf } from "./escalation.js";
 import * as store from "./store.js";
+import { buildState } from "./state.js";
 
 const REPO_ROOT = resolve(process.env.ZUKAI_REPO_ROOT || process.cwd());
-const MAX_CONTENT = Number(process.env.ZUKAI_MAX_CONTENT || 60000);
 
 const CALIBRATION_WARNING =
   "ルーブリックの閾値は較正前の暫定値（HANDOFF 3.3「0.70 と 0.50 に根拠はない」）。" +
@@ -53,40 +53,6 @@ function readArtifact(artifactPath, inlineContent) {
 }
 
 // 図は SVG ソースをテキストとして state に含める（HANDOFF 3.4: 画像は評価できない）。
-const STATE_HEADINGS = {
-  diagram: {
-    task: "# この図解が説明すべき仕組み（依頼内容）",
-    source: "# 元資料（図解の主張はここで裏付けられている必要がある）",
-    fallback: "(提供なし。資料に無い断定が無いかは、依頼内容のみを基準に判断すること)",
-    body: "図解アーティファクト",
-  },
-  article: {
-    task: "# この文章が答えるべき問い（依頼内容）",
-    source: "# 元資料（本文の主張はここで裏付けられている必要がある）",
-    fallback: "(提供なし。資料に無い断定が無いかは、依頼内容のみを基準に判断すること)",
-    body: "記事原稿",
-  },
-};
-
-function buildState({ task, sourceMaterial, artifact, note, scope }) {
-  const h = STATE_HEADINGS[scope] || STATE_HEADINGS.diagram;
-  const truncated = artifact.content.length > MAX_CONTENT;
-  const body = truncated ? artifact.content.slice(0, MAX_CONTENT) : artifact.content;
-  return [
-    h.task,
-    task,
-    "",
-    h.source,
-    sourceMaterial?.trim() || h.fallback,
-    "",
-    note ? `# 今回の変更点\n${note}\n` : "",
-    `# ${h.body} (${artifact.path}, ${artifact.bytes} bytes${truncated ? ", 先頭のみ" : ""})`,
-    body,
-  ]
-    .filter((s) => s !== "")
-    .join("\n");
-}
-
 function resolveRun(artifactPath, explicitRunId) {
   if (explicitRunId) return explicitRunId;
   const state = store.getState(REPO_ROOT);

@@ -2,6 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "outputDirectory": "public",
   "functions": {
-    "api/probe.js": { "maxDuration": 30 }
+    "api/probe.js": { "maxDuration": 30 },
+    "api/calibrate.js": {
+      "maxDuration": 60,
+      "includeFiles": "{rubric-*.json,samples.json,samples/**}"
+    }
   }
 }
