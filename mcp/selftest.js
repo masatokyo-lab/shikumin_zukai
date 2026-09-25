@@ -9,7 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import {
@@ -289,6 +289,8 @@ const g5Fix = fixList(run({ g5_fabricated_specificity: 0.9 }), R);
 check("g5 の修正指示に「出典を確認せよ」が付く", g5Fix[0]?.means?.includes("出典を確認せよ"), JSON.stringify(g5Fix[0]));
 
 // ── C. MCP 往復 ────────────────────────────────────────────────────────────
+// C はゲートモードの仕様（修正ループとエスカレーション）を検査する。助言モードは E で切り替えて見る。
+writeFileSync(resolve(sandbox, "zukai.config.json"), JSON.stringify({ mode: "gate" }), "utf8");
 const client = new Client({ name: "zukai-selftest", version: "0.2.0" });
 await client.connect(
   new StdioClientTransport({
@@ -302,8 +304,8 @@ await client.connect(
 console.log(`\nMCP 往復 (sandbox: ${sandbox})`);
 
 const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-check("tools/list は 5 件", tools.length === 5, tools.join(", "));
-for (const t of ["jev_ping", "jev_review", "jev_decide", "jev_feed", "jev_status"]) {
+check("tools/list は 7 件", tools.length === 7, tools.join(", "));
+for (const t of ["jev_ping", "jev_review", "jev_decide", "jev_feed", "jev_status", "jev_label", "jev_record_decision"]) {
   check(`tool present: ${t}`, tools.includes(t));
 }
 check("jev_gate は廃止されている", !tools.includes("jev_gate"));
@@ -311,6 +313,8 @@ check("jev_gate は廃止されている", !tools.includes("jev_gate"));
 const ping = parse(await client.callTool({ name: "jev_ping", arguments: {} }));
 check("自己診断は必ず stub で走る", ping.mode === "stub" && ping.forced_stub === true, `${ping.mode} forced=${ping.forced_stub}`);
 check("ping が鍵の env 名を返す", ping.key_env === "AI_GATEWAY_API_KEY");
+check("ping が review_mode と読み込み元を返す", ping.review_mode === "gate" && ping.review_mode_source === "zukai.config.json", `${ping.review_mode} ${ping.review_mode_source}`);
+check("ping が移行条件の状態を返す", ping.transition?.scopes?.diagram?.streak_required === 3);
 check("ping が2本のルーブリックを返す", ping.rubrics.length === 2, String(ping.rubrics.length));
 const pingByScope = Object.fromEntries(ping.rubrics.map((r) => [r.scope, r]));
 check("ping が極性を返す", ping.rubrics.every((r) => r.polarity === "defect"));
@@ -445,7 +449,108 @@ const traversal = await client.callTool({
 });
 check("リポジトリ外のパスは拒否される", traversal.isError === true);
 
+// ── E. 助言モード（v0 方針）。設定は呼び出しごとに読むので、書き換えるだけで切り替わる ─────
+console.log("\nE. 助言モード");
+writeFileSync(resolve(sandbox, "zukai.config.json"), JSON.stringify({ mode: "advisory" }), "utf8");
+const advArgs = { task: "同上", artifact_path: "sample.html", note: "2回目" };
+const adv1 = parse(await client.callTool({ name: "jev_review", arguments: advArgs }));
+const adv2 = parse(await client.callTool({ name: "jev_review", arguments: advArgs }));
+check("advisory の review_mode が返る", adv1.review_mode === "advisory");
+check("advisory は修正ループを指示しない", adv1.next_action === "present_report_and_stop" && adv2.next_action === "present_report_and_stop");
+check("advisory は同じ結果が続いてもエスカレーションしない", adv2.escalate.length === 0 && adv2.escalation_reasons.length === 0, JSON.stringify(adv2.escalate));
+check("advisory でも verdict は算出する", ["ship", "revise", "block", "unknown"].includes(adv1.verdict));
+check("advisory は報告本文を返す", typeof adv1.report?.text === "string" && adv1.report.text.includes("助言モード"));
+check("報告が stub を明示する", adv1.report.text.includes("stub"));
+check("報告が s7 の人間確認を毎回出す", adv1.report.text.includes("人間確認（必須）"));
+check("報告が判定の記録を求める", adv1.report.text.includes("判定を記録してください") && adv1.label_request.seq === adv1.seq);
+const cfgBroken = resolve(sandbox, "zukai.config.json");
+writeFileSync(cfgBroken, JSON.stringify({ mode: "gat" }), "utf8");
+const typo = await client.callTool({ name: "jev_review", arguments: advArgs });
+check("未知の mode は黙って advisory に倒さず止める", typo.isError === true);
+writeFileSync(cfgBroken, JSON.stringify({ mode: "advisory" }), "utf8");
+
+const lab = parse(
+  await client.callTool({
+    name: "jev_label",
+    arguments: { seq: adv1.seq, human_verdict: "fail", jev_caught_missed: true, human_caught_missed: false, group_labels: { g5_epistemic: "fail" } },
+  })
+);
+check("jev_label が台帳に記録する", lab.recorded?.review_seq === adv1.seq && /^live-\d{8}-001$/.test(lab.recorded.id), JSON.stringify(lab.recorded));
+check("stub の判定に付けたラベルは移行条件に数えない", lab.outcome === "excluded_stub", lab.outcome);
+check("jev_label が本文つきの標本を返す", lab.sample?.content === SAMPLE && lab.sample.label_source === "live");
+const ledgerText = readFileSync(resolve(sandbox, "labels", "ledger.jsonl"), "utf8");
+check("台帳に本文を書かない（リポジトリが public）", !ledgerText.includes("受注入力") && ledgerText.includes(adv1.run_id));
+const badGroup = await client.callTool({ name: "jev_label", arguments: { seq: articleReview.seq, human_verdict: "pass", group_labels: { g2_figure_labeling: "pass" } } });
+check("別ルーブリックの群ラベルは拒否する", badGroup.isError === true);
+const noSeq = await client.callTool({ name: "jev_label", arguments: { seq: 9999, human_verdict: "pass" } });
+check("存在しない seq は拒否する", noSeq.isError === true);
+
+const dec = parse(
+  await client.callTool({ name: "jev_record_decision", arguments: { scope: "diagram", trigger: "checkpoint", decision: "stay_advisory", reason: "テスト" } })
+);
+check("移行判断を記録する", dec.recorded?.decision === "stay_advisory" && dec.review_mode === "advisory");
+const sw = parse(
+  await client.callTool({ name: "jev_record_decision", arguments: { scope: "diagram", trigger: "streak", decision: "switch_to_gate", reason: "テスト" } })
+);
+check("switch_to_gate で設定が gate に変わる", sw.review_mode === "gate" && JSON.parse(readFileSync(cfgBroken, "utf8")).mode === "gate");
+check("較正を見ずにゲートへ移ると警告する", sw.warnings.some((w) => w.includes("較正")));
+
 await client.close();
+
+// 移行条件の数え方を、作った台帳で直接検査する（MCP 経由では stub しか作れないため）
+console.log("\nE2. 移行条件（3回連続で Jev が目視を上回る）");
+{
+  const L = await import("./labels.js");
+  const root = mkdtempSync(resolve(tmpdir(), "zukai-labels-"));
+  const cfg = { mode: "advisory", transition: { streak_required: 3, streak_ties_reset: true, checkpoint_labels_per_scope: 10, checkpoint_min_minority_share: 0.3 } };
+  let t0 = Date.parse("2026-09-25T00:00:00Z");
+  const add = (o) => L.appendLabel(root, { scope: "article", client_mode: "live", jev_verdict: "block", human_verdict: "fail", ...o }, new Date((t0 += 1000)));
+  check("Jev だけが見つけた → jev_better", add({ jev_caught_missed: true, human_caught_missed: false }).outcome === "jev_better");
+  check("目視だけが見つけた → jev_worse", L.classify({ label_source: "live", client_mode: "live", jev_verdict: "block", jev_caught_missed: false, human_caught_missed: true }) === "jev_worse");
+  check("両方見つけた → even", L.classify({ label_source: "live", client_mode: "live", jev_verdict: "revise", jev_caught_missed: true, human_caught_missed: true }) === "even");
+  check("Jev が判定不能 → jev_worse", L.classify({ label_source: "live", client_mode: "live", jev_verdict: "unknown", jev_caught_missed: true, human_caught_missed: false }) === "jev_worse");
+  check("問いに答えていない → unrated（数えない）", L.classify({ label_source: "live", client_mode: "live", jev_verdict: "ship" }) === "unrated");
+  add({ jev_caught_missed: true, human_caught_missed: false });
+  check("2連続ではまだ満たさない", L.transitionStatus(root, cfg).scopes.article.streak === 2 && !L.transitionStatus(root, cfg).scopes.article.streak_met);
+  add({ jev_caught_missed: false, human_caught_missed: false, human_verdict: "pass", jev_verdict: "ship" });
+  check("引き分けで連続が切れる（文字どおりの「連続」）", L.transitionStatus(root, cfg).scopes.article.streak === 0);
+  const lax = { ...cfg, transition: { ...cfg.transition, streak_ties_reset: false } };
+  check("streak_ties_reset=false なら引き分けで切れない", L.transitionStatus(root, lax).scopes.article.streak === 2);
+  add({ jev_caught_missed: false, human_caught_missed: false, client_mode: "stub" });
+  check("stub の回は連続に数えない", L.transitionStatus(root, lax).scopes.article.streak === 2);
+  for (let i = 0; i < 3; i++) add({ jev_caught_missed: true, human_caught_missed: false });
+  const met = L.transitionStatus(root, cfg);
+  check("3連続で移行条件を満たし、判断を催促する", met.scopes.article.streak_met && met.prompts.some((x) => x.includes("移行条件")));
+  check("もう一方の scope には波及しない", met.scopes.diagram.streak === 0);
+  L.appendDecision(root, { scope: "article", trigger: "streak", decision: "stay_advisory", reason: "t" }, new Date((t0 += 1000)));
+  check("判断を記録したら数え直す", L.transitionStatus(root, cfg).scopes.article.streak === 0);
+  for (let i = 0; i < 3; i++) add({ jev_caught_missed: false, human_caught_missed: false, human_verdict: "pass", jev_verdict: "ship" });
+  const cp = L.transitionStatus(root, cfg).scopes.article.checkpoint;
+  check("件数の節目: stub を除く現行基準ラベルを数える", cp.labels === 9 && !cp.met, JSON.stringify(cp));
+  add({ jev_caught_missed: false, human_caught_missed: false, human_verdict: "pass", jev_verdict: "ship" });
+  const cp2 = L.transitionStatus(root, cfg);
+  check("10件で節目に達し、較正の実行を催促する", cp2.scopes.article.checkpoint.pending_decision && cp2.prompts.some((x) => x.includes("較正")));
+  L.appendLabel(root, { id: "D01", label_source: "curated", scope: "diagram", human_verdict: "pass", needs_rejudge: true });
+  check("再判定待ちのラベルは節目に数えない", L.transitionStatus(root, cfg).scopes.diagram.checkpoint.labels === 0 && L.transitionStatus(root, cfg).scopes.diagram.needs_rejudge.includes("D01"));
+}
+
+// 報告の並び（方針 2.3）。stub の回答では g5 が立つとは限らないので、作った結果で見る。
+{
+  const { buildAdvisoryReport } = await import("./report.js");
+  const rubric = loadRubric(pkgRoot, "article");
+  const g5q = rubric.questions.find((q) => q.group === "g5_epistemic");
+  const g6q = rubric.questions.find((q) => q.group === "g6_article_structure");
+  const answers = {};
+  for (const q of rubric.questions) answers[q.key] = { type: "boolean", probability: q === g5q || q === g6q ? 0.9 : 0.1 };
+  answers[rubric.scored.key] = { type: "score", score: 2 };
+  const r = interpret(answers, rubric);
+  const rep = buildAdvisoryReport({ result: r, fixes: fixList(r, rubric), rubric, clientMode: "live", seq: 1 });
+  const t = rep.text;
+  check("g5 の発火を最上段（他の指摘より前）に出す", t.indexOf("出典を確認せよ") > -1 && t.indexOf("出典を確認せよ") < t.indexOf("### 指摘"));
+  check("g5 を「間違っている」と書かない", !/間違って|誤りである|虚偽/.test(t.split("### 指摘")[0].replace("事実が誤りだという判定ではない", "")));
+  check("PASS した群は1行に畳む", (t.match(/問題なし:/g) || []).length === 1 && t.includes("コンテキスト品質"));
+  check("live では stub 表示を出さない", !t.includes("stub"));
+}
 
 // ── D. 較正（HANDOFF 7章）。Jev を呼ばず、作った回答で集計ロジックを検査する ─────────
 console.log("\nD. 較正");
