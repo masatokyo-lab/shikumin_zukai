@@ -366,6 +366,30 @@ Vercel にデプロイし（`api/probe.js`、CLI と同じ `mcp/probe-core.js` �
 8章 #1 は解消。5.2「score の返り値の下限」は実測でも 0 起点と確定。
 一致度・較正済みの確信度は依然未検証（7章 C-6 待ち）。
 
+**2026-09-26 追記：手元（Claude Code on the web）からも live で届くようになった。**
+`npm run probe` が `mode: "live"` で all ok。極性の向きも記録できた（1サンプルなので参考値）：
+出典なき数値あり `probability=0.98`、SVGを含む `0.01`、score raw `0.08`（0起点）。
+MCP 経由の `jev_ping` も `mode: "live"`、両ルーブリック v0.4.0（22問 / 18問）、unreachable / fragile ゼロ。
+
+セッション開始時に `zukai-jev` MCP が `Connection closed` で落ちたのは、クローン直後で
+`node_modules` が無く `mcp/server.js` の import が失敗したため。`npm ci` 後は起動する。
+
+**R1 ルーブリックでの初回 live 実行**（`jev_review`、scope `diagram`、`artifacts/jev-loop.html`、
+run `run_20260926081946_1zqa`、5,236 tokens、585ms）：
+
+| 群 | 判定 | 欠陥（probability / 閾値） |
+|---|---|---|
+| g1_traceability | pass | なし（最大 `g1_omitted_subject` 0.54） |
+| g2_figure_labeling | **FAIL** | `g2_axis_meaning_unclear` 0.65 / 0.50（critical） |
+| g3_text_figure_alignment | **FAIL** | `g3_missing_time_axis` 0.68 / 0.50（critical） |
+| g4_granularity_flow | pass | なし（最大 `g4_abrupt_abstraction_jump` 0.46） |
+| g5_epistemic | **FAIL** | `g5_unmarked_speculation` 0.75、`g5_fabricated_specificity` 0.83 |
+
+`verdict: block`、`clean_ratio: 0.818`、s7 は level 3.47（threshold 4 未達、人間確認待ち）。
+**この判定を品質の根拠にしないこと**（閾値は較正前、禁止事項 #6）。特に g2 / g3 の2件は
+フロー図に「軸」「時間軸」を求める空振りの疑いがある（ここは推測）。critical 閾値 0.50 の
+近傍（0.65 / 0.68）で落ちており、7章の較正で g2 / g3 の境界事例（8章 #4）を作る動機になる。
+
 ## B. 原文の記述ミスと判断したもの
 
 | 箇所 | 原文 | 実体 |
@@ -384,7 +408,7 @@ Vercel にデプロイし（`api/probe.js`、CLI と同じ `mcp/probe-core.js` �
 | 4 | ~~3.1: `g6_article_structure`（記事構造）~~ | **対応済み。** `rubric-article.json` に5問。`scope: "article"` で有効になる |
 | 5 | ~~2.3: `stagnation` / `oscillation` の群単位検出~~ | **対応済み。** `mcp/escalation.js` がサーバー側で群単位に判定し、`jev_review` が `escalate` / `escalation_reasons` で返す |
 | 6 | 7章: `samples.json` と `calibrate` | **未着手。閾値 0.70 / 0.50 / 2 は根拠のない初期値のまま。** 6章「順序の原則」に対して配線が先行している状態は解消していない |
-| 7 | 5.2 / 8章 #1: probe を通す | **対応済み。** 手元の実行環境は egress で塞がれたままだが、Vercel 上に同じ検査（`api/probe.js`）を用意して 2026-09-23 に実キーで通した（A 節末尾） |
+| 7 | 5.2 / 8章 #1: probe を通す | **対応済み。** 2026-09-23 に Vercel 上の `api/probe.js` で実キー疎通。2026-09-26 に手元からも live で通った（A 節末尾） |
 
 ### ルーブリック差し替えで判明したこと
 
