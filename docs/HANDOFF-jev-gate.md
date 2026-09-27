@@ -578,6 +578,10 @@ probe は Vercel 上で通った（A 節）が、`jev_review` を動かす Claud
 `HANDOFF-chat.md`（1.2「種類の明記 article / diagram」）はまだ層分割を反映していない。**
 ルーブリック JSON は変えていない（群を選ぶだけ）ので、JSON の食い違いは無い。
 
+Drive の更新は本人の指示でチャット（製造側）が行う（2026-09-27）。反映してほしい変更は
+[`drive-update-request-2026-09-27.md`](drive-update-request-2026-09-27.md) にまとめた。
+反映後、この写しの1〜9章と `HANDOFF-chat.md` を Drive に合わせる。
+
 ### まだ決めていないこと
 
 | # | 事項 | 状態 |
