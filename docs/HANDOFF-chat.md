@@ -1,5 +1,11 @@
 # HANDOFF: 製造（チャット）× 品質検査（Code）の分業
 
+> **2026-09-27 追記（リポジトリの写しだけ。Drive 版は未反映）**
+> 検査は ①本文 / ②図単体 / ③整合 の3層に分け、④公開判断は本人が行うことにした（`HANDOFF-jev-gate.md` 付記 G）。
+> 下の 1.2「種類の明記（article / diagram）」と 1.3 の `scope` は古い。Code 側は `jev_review_all` で記事を①②③まとめて検査する。
+> チャットが Drive に置くもの: 本文（図は「【図】図N：キャプション」の行で位置を示す）と、**図ごとの SVG ファイル**
+> （PNG は評価できない。タイトルと数値の注記は描画の中に書く。SVG の `<title>` は読者に見えないので検査にも渡さない）。
+
 作成 2026-09-26。Claude Code セッション（ブランチ `claude/probe-r1-execution-handoff-0fcj92`）から
 claude.ai チャットへの引き継ぎ。Jev 品質ゲート全体の契約は `HANDOFF-jev-gate.md`（同じ Drive フォルダ）が正。
 

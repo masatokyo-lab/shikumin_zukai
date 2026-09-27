@@ -59,9 +59,27 @@ export function setState(repoRoot, patch) {
   return next;
 }
 
-export function nextIteration(repoRoot, runId) {
-  const prev = readAll(repoRoot).filter((r) => r.run_id === runId);
+// 反復は「同じ run の、同じ対象（subject）」で数える。層分割後は1つの記事で
+// ①本文・②図単体・③整合を図の数だけ回すので、run だけで数えると他の層の検査まで周回に数えてしまう。
+// subject を持たない古い記録は run だけで数える。
+export function nextIteration(repoRoot, runId, subject = null, kind = null) {
+  const prev = readAll(repoRoot).filter(
+    (r) =>
+      r.run_id === runId &&
+      (subject == null || r.subject === subject) &&
+      (kind == null || r.kind === kind)
+  );
   return prev.length + 1;
+}
+
+// 同じ対象の直近の記録。層や図を行き来しても反復を数えられるよう、
+// 「直前に検査したもの」ではなく「同じ対象の最後の記録」を探す。
+export function lastForSubject(repoRoot, subject, kind) {
+  const rows = readAll(repoRoot);
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].subject === subject && rows[i].kind === kind) return rows[i];
+  }
+  return null;
 }
 
 export function summarize(repoRoot) {
@@ -70,7 +88,13 @@ export function summarize(repoRoot) {
   const byRun = new Map();
   for (const r of rows) {
     if (!r.run_id) continue;
-    const entry = byRun.get(r.run_id) || { run_id: r.run_id, artifact: r.artifact, evaluations: 0 };
+    const entry = byRun.get(r.run_id) || {
+      run_id: r.run_id,
+      artifact: r.artifact,
+      layer: r.layer ?? null,
+      subject: r.subject ?? null,
+      evaluations: 0,
+    };
     entry.evaluations += 1;
     entry.last_verdict = r.verdict ?? entry.last_verdict;
     // 品質スコアではなく「欠陥なしと答えられた質問の割合」。ゲートには使わない。

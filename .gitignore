@@ -1,3 +1,7 @@
 node_modules/
 .jev/
 .env
+# 較正の標本は本文（有料 note の原稿を含む）を持つ。このリポジトリは public なので commit しない。
+# 見本は samples.example.json（架空の文章）。本物は Drive「99. Jev連携/labels」から取ってくる。
+samples.json
+samples/

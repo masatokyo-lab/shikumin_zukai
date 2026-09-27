@@ -58,13 +58,18 @@ export function evaluateEscalation({
   };
 }
 
-/** 同じ run の直前のレビュー記録。比較できる形でなければ null。 */
-export function previousReview(records, runId, iteration) {
+/**
+ * 同じ run・同じ対象の直前の記録。比較できる形でなければ null。
+ * subject（層×対象）を渡すと、その対象の記録だけを見る。層が違えば群の集合が違うので、
+ * 別の層の FAIL群 と突き合わせると oscillation が誤発火する。
+ */
+export function previousReview(records, runId, iteration, subject = null, kind = "review") {
   const prior = (records ?? [])
     .filter(
       (r) =>
         r.run_id === runId &&
-        r.kind === "review" &&
+        r.kind === kind &&
+        (subject == null || r.subject === subject) &&
         typeof r.iteration === "number" &&
         r.iteration < iteration
     )

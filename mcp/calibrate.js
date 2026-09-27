@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 較正（HANDOFF 7章）。
 //
-//   npm run calibrate                     samples.json を Jev に通し、回答と報告を書き出す（live 必須）
+//   npm run calibrate                     samples.json を Jev に通し、層ごとに回答と報告を書き出す（live 必須）
 //   npm run calibrate -- --from <file>    取得済みの回答から閾値スイープだけやり直す（Jev を呼ばない）
 //
 // 書き出し: calibration-evaluations.json（生の回答）/ calibration-report.json（報告）
@@ -50,4 +50,4 @@ if (fromFile) {
 const report = buildReport(samples, evaluations, { repoRoot });
 writeFileSync(join(repoRoot, "calibration-report.json"), JSON.stringify(report, null, 2));
 console.log("\n" + summaryLines(report).join("\n"));
-console.log("採用するかは人間が決める。採用したら rubric-*.json の scoring.probability_threshold を更新し、トップレベルに calibrated: true を立てること。");
+console.log("採用するかは人間が決める。採用する場合は Drive 正本の rubric-*.json の scoring.probability_threshold を直してから取り込み、トップレベルに calibrated: true を立てる（②図単体と③整合は rubric-diagram.json を共有する）。");

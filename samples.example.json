@@ -1,0 +1,44 @@
+{
+  "_note": "較正の標本の見本（架空の文章）。本物の samples.json は gitignore されている（本文を含むため）。1件 = 1つの層について、人間がその層と同じものを見て付けた判定。④公開判断は入れない。",
+  "samples": [
+    {
+      "id": "example-text-001",
+      "layer": "text",
+      "task": "受注から出荷までを内製で回すか外注するかを判断できるようにする記事",
+      "source_material": "外注は固定費、内製は件数比例。分岐点は月200件。",
+      "text": {
+        "path": "example/article.md",
+        "content": "# 内製か外注か\n\n結論: 月200件までは内製の方が安い。\n\n【図】図1：件数と総コストの関係\n\nただし繁忙期の人員確保が前提。"
+      },
+      "human_verdict": "pass",
+      "boundary": false,
+      "label_source": "live"
+    },
+    {
+      "id": "example-figure-001",
+      "layer": "figure",
+      "task": "件数と総コストの関係を示す図",
+      "figure_file": {
+        "path": "example/fig1.svg",
+        "content": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 200 100\"><text x=\"10\" y=\"20\">総コスト</text><path d=\"M10 90 L190 20\"/></svg>"
+      },
+      "figure": "図1",
+      "human_verdict": "fail",
+      "group_labels": { "g2_figure_labeling": "fail" },
+      "boundary": false,
+      "label_source": "synthetic"
+    },
+    {
+      "id": "example-alignment-001",
+      "layer": "alignment",
+      "task": "受注から出荷までを内製で回すか外注するかを判断できるようにする記事",
+      "text_file": "samples/example-article.md",
+      "figure_file": "samples/example-fig1.svg",
+      "figure": "図1",
+      "human_verdict": "fail",
+      "group_labels": { "g3_text_figure_alignment": "fail" },
+      "boundary": true,
+      "label_source": "live"
+    }
+  ]
+}

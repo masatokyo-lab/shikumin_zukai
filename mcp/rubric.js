@@ -13,22 +13,30 @@
 // 極性は defect。全ての boolean 質問は「欠陥が存在するか」を問い、probability は
 // 欠陥が存在する確率。HANDOFF 3.2: v0.1 は逆の極性（「良いか」）だった。古いコードや
 // 古いルーブリックを流用する場合は必ず反転すること — loadRubric が polarity を検査して止める。
+//
+// 検査は2本のファイルを直接使わず、**層（layers.js）ごとに群を選んで**使う（付記 G）:
+//   ① 本文    rubric-article.json の全群（g1 / g4 / g5 / g6）＋ s7
+//   ② 図単体  rubric-diagram.json の g2 / g5
+//   ③ 整合    rubric-diagram.json の g3
+// diagram の g1 / g4 は①（article）で問うので使わない。選ぶだけで、質問文には手を入れない。
 
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readScoreLevel, readProbability, readScore } from "./jev.js";
+import { LAYER_IDS, layerDef, layerName } from "./layers.js";
 
 // ルーブリックの正本はリポジトリに同梱されている。ZUKAI_REPO_ROOT は評価対象と
 // .jev/ の置き場所であってルーブリックの置き場所ではないので、既定はパッケージ側を見る。
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 export const SCOPES = ["diagram", "article"];
+// scope を持たない古い記録（層分割より前）は diagram で検査されていた。その読み替えにだけ使う。
 export const DEFAULT_SCOPE = "diagram";
 
 const SCOPE_NOTE = {
-  diagram: "図解コンテンツ用。g2（軸・単位）と g3（本文と図の整合）を含む。",
-  article: "図を伴わない文章用。g2 / g3 は図が無いと空振りするので外し、g6（記事構成）を足す。",
+  diagram: "②図単体（g2・g5）と③整合（g3）の質問の出どころ。g1 / g4 は①本文（article）で問うので使わない。",
+  article: "①本文の質問の出どころ（g1 / g4 / g5 / g6）。図は隠すので g2 / g3 は無い。",
 };
 
 // 質問IDの短い表示名。ルーブリックJSON（Drive 正本）には label が無いので、
@@ -222,16 +230,53 @@ export function loadAllRubrics(repoRoot) {
   return SCOPES.map((scope) => loadRubric(repoRoot, scope));
 }
 
+/**
+ * 層のルーブリック。ファイルを読み、その層で問う群だけを残す（layers.js）。
+ * 質問文・閾値・critical 指定は正本のまま。群が正本に無ければ止める —
+ * 黙って空の層を作ると、その層は何も検査せずに合格を返すようになる。
+ */
+export function loadLayer(repoRoot, layerId) {
+  const def = layerDef(layerId);
+  const base = loadRubric(repoRoot, def.rubric);
+  const wanted = def.groups ?? base.groups.map((g) => g.key);
+  const missing = wanted.filter((k) => !base.groups.some((g) => g.key === k));
+  if (missing.length) {
+    throw new Error(
+      `${base.source} に ${layerName(def)} の群がありません: ${missing.join(", ")}。` +
+        "Drive 正本の群構成が変わった可能性。layers.js と正本を突き合わせること。"
+    );
+  }
+  return {
+    ...base,
+    layer: def.id,
+    layer_number: def.number,
+    layer_label: def.label,
+    groups: base.groups.filter((g) => wanted.includes(g.key)),
+    questions: base.questions.filter((q) => wanted.includes(q.group)),
+    // s7 は①でだけ問う。図単体や本文と図の組に「一次経験の裏打ち」を問う意味は無い。
+    scored: def.scored ? base.scored : null,
+    levels: def.scored ? base.levels : null,
+    // 正本にあってこの層では問わない群。黙って消さず、ping で見えるようにする。
+    unused_groups: base.groups.filter((g) => !wanted.includes(g.key)).map((g) => g.key),
+  };
+}
+
+export function loadAllLayers(repoRoot) {
+  return LAYER_IDS.map((id) => loadLayer(repoRoot, id));
+}
+
 export function buildQuestions(rubric) {
   const questions = {};
   for (const q of rubric.questions) {
     questions[q.key] = { type: "boolean", instructions: q.instructions };
   }
-  questions[rubric.scored.key] = {
-    type: "score",
-    instructions: rubric.scored.instructions,
-    criteria: rubric.levels,
-  };
+  if (rubric.scored) {
+    questions[rubric.scored.key] = {
+      type: "score",
+      instructions: rubric.scored.instructions,
+      criteria: rubric.levels,
+    };
+  }
   return questions;
 }
 
@@ -321,26 +366,8 @@ export function interpret(answers, rubric) {
     : null;
 
   // scored は verdict に算入しない。人間確認の対象として別枠で返す。
-  // score は 0 起点の小数位置。threshold は水準番号（1 起点）で書かれているので level と比べる。
-  const rawScore = readScore(answers[rubric.scored.key]);
-  const scoreRead = readScoreLevel(rawScore, rubric.levels.length);
-  const scoreLevel = scoreRead?.level ?? null;
-  const human_review = {
-    required: true,
-    key: rubric.scored.key,
-    label: rubric.scored.label,
-    raw: rawScore, // 0 起点の小数位置
-    level: scoreLevel, // 1 起点表記。小数のまま（3.6 は水準4に届いていない）
-    level_description:
-      scoreLevel === null
-        ? null
-        : rubric.levels[Math.min(rubric.levels.length - 1, Math.round(scoreLevel) - 1)],
-    threshold: rubric.scored.threshold,
-    meets_threshold: scoreLevel === null ? null : scoreLevel >= rubric.scored.threshold,
-    note:
-      "Jev の出力は参考値。一次経験の有無は state のテキストからは検証できない（HANDOFF 3.4）。" +
-      "人間が確認するまで ship を名乗らないこと（禁止事項 #3）。",
-  };
+  // s7 を問わない層（②図単体・③整合）では null。
+  const human_review = rubric.scored ? humanReview(answers, rubric) : null;
 
   let verdict;
   if (missing_answers.length) verdict = "unknown";
@@ -359,6 +386,7 @@ export function interpret(answers, rubric) {
     result,
     fail_reason,
     verdict,
+    layer: rubric.layer ?? null,
     scope: rubric.scope,
     rubric_version: rubric.version,
     polarity: "defect",
@@ -374,6 +402,29 @@ export function interpret(answers, rubric) {
     fragile_groups,
     human_review,
     calibrated: Boolean(rubric.thresholds.calibrated),
+  };
+}
+
+// score は 0 起点の小数位置。threshold は水準番号（1 起点）で書かれているので level と比べる。
+function humanReview(answers, rubric) {
+  const rawScore = readScore(answers[rubric.scored.key]);
+  const scoreRead = readScoreLevel(rawScore, rubric.levels.length);
+  const scoreLevel = scoreRead?.level ?? null;
+  return {
+    required: true,
+    key: rubric.scored.key,
+    label: rubric.scored.label,
+    raw: rawScore, // 0 起点の小数位置
+    level: scoreLevel, // 1 起点表記。小数のまま（3.6 は水準4に届いていない）
+    level_description:
+      scoreLevel === null
+        ? null
+        : rubric.levels[Math.min(rubric.levels.length - 1, Math.round(scoreLevel) - 1)],
+    threshold: rubric.scored.threshold,
+    meets_threshold: scoreLevel === null ? null : scoreLevel >= rubric.scored.threshold,
+    note:
+      "Jev の出力は参考値。一次経験の有無は state のテキストからは検証できない（HANDOFF 3.4）。" +
+      "人間が確認するまで ship を名乗らないこと（禁止事項 #3）。",
   };
 }
 
