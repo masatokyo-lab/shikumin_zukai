@@ -348,7 +348,16 @@ export function interpret(answers, rubric) {
   else if (defects.length) verdict = "revise";
   else verdict = "ship";
 
+  // 検査器の出力は合格/不合格の2値（2026-09-25 本人決定）。
+  // 群FAIL が無ければ合格。単発の欠陥（revise）も合格にする: 一致度約68%で欠陥1件を不合格にすると
+  // 誤検出で毎回落ちてループを使い切る（HANDOFF 3.3）。critical は単独で群FAIL になるので止まる。
+  // 判定不能（unknown）は合格にしない（禁止事項 #5）。直す対象が無いので修正ではなく人間に返す。
+  const result = verdict === "ship" || verdict === "revise" ? "pass" : "fail";
+  const fail_reason = verdict === "unknown" ? "unknown" : verdict === "block" ? "group_fail" : null;
+
   return {
+    result,
+    fail_reason,
     verdict,
     scope: rubric.scope,
     rubric_version: rubric.version,

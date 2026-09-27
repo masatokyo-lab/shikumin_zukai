@@ -10,7 +10,8 @@
   "scripts": {
     "mcp": "node mcp/server.js",
     "check": "ZUKAI_FORCE_STUB=1 node mcp/selftest.js",
-    "probe": "node mcp/probe.js"
+    "probe": "node mcp/probe.js",
+    "calibrate": "node mcp/calibrate.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

@@ -40,9 +40,9 @@ export function evaluateEscalation({
   const previous = previousFailedGroups == null ? null : normalize(previousFailedGroups);
   const escalate = [];
 
-  // 通った周ではエスカレーションしない。3周目で ship したのに
-  // 「エスカレーション」と報告するのは誤解を招くだけ。
-  if (verdict !== "ship") {
+  // 合格した周ではエスカレーションしない。3周目で合格したのに
+  // 「エスカレーション」と報告するのは誤解を招くだけ。合格は ship と revise（rubric.js の result）。
+  if (verdict === "block" || verdict === "unknown") {
     if (iteration >= maxRetries) escalate.push("retry_limit");
     // 両方空（＝落ちていない）で stagnation を出さない。
     if (previous && current.length && sameSet(current, previous)) escalate.push("stagnation");

@@ -17,6 +17,7 @@
         background:var(--bg);color:var(--fg)}
   a.btn{display:block;text-align:center;margin-top:16px;padding:14px;border-radius:8px;
         background:var(--accent);color:#fff;text-decoration:none;font-weight:700}
+  a.btn.sec{background:transparent;color:var(--accent);border:1px solid var(--accent)}
   ol{padding-left:1.2em}
   li{margin:6px 0;font-size:14px}
   code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:13px}
@@ -28,8 +29,9 @@
   <label for="t">PROBE_TOKEN（環境変数に設定した場合のみ）</label>
   <input id="t" type="text" inputmode="text" autocomplete="off" placeholder="未設定なら空のまま">
   <a class="btn" id="go" href="/api/probe">probe を実行</a>
+  <a class="btn sec" id="cal" href="/api/calibrate">較正を実行（samples.json 全件）</a>
 
-  <div class="note">1回の実行につき Jev が1往復ぶん課金されます。</div>
+  <div class="note">probe は1回につき Jev が1往復、較正はサンプル件数ぶん課金されます。較正は PROBE_TOKEN の設定が必須です。</div>
 
   <h2 style="font-size:16px">動かない場合</h2>
   <ol>
@@ -39,11 +41,13 @@
   </ol>
 
   <script>
-    const t = document.getElementById("t"), go = document.getElementById("go");
+    const t = document.getElementById("t"), go = document.getElementById("go"), cal = document.getElementById("cal");
     try { t.value = localStorage.getItem("probe_token") || ""; } catch {}
     const sync = () => {
       const v = t.value.trim();
-      go.href = v ? "/api/probe?token=" + encodeURIComponent(v) : "/api/probe";
+      const q = v ? "?token=" + encodeURIComponent(v) : "";
+      go.href = "/api/probe" + q;
+      cal.href = "/api/calibrate" + q;
       try { localStorage.setItem("probe_token", v); } catch {}
     };
     t.addEventListener("input", sync); sync();

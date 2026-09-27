@@ -31,9 +31,10 @@ import {
 } from "./rubric.js";
 import { evaluateEscalation, previousReview, previousFailedGroupsOf } from "./escalation.js";
 import * as store from "./store.js";
+import { buildState } from "./state.js";
+import * as labels from "./labels.js";
 
 const REPO_ROOT = resolve(process.env.ZUKAI_REPO_ROOT || process.cwd());
-const MAX_CONTENT = Number(process.env.ZUKAI_MAX_CONTENT || 60000);
 
 const CALIBRATION_WARNING =
   "ルーブリックの閾値は較正前の暫定値（HANDOFF 3.3「0.70 と 0.50 に根拠はない」）。" +
@@ -53,40 +54,6 @@ function readArtifact(artifactPath, inlineContent) {
 }
 
 // 図は SVG ソースをテキストとして state に含める（HANDOFF 3.4: 画像は評価できない）。
-const STATE_HEADINGS = {
-  diagram: {
-    task: "# この図解が説明すべき仕組み（依頼内容）",
-    source: "# 元資料（図解の主張はここで裏付けられている必要がある）",
-    fallback: "(提供なし。資料に無い断定が無いかは、依頼内容のみを基準に判断すること)",
-    body: "図解アーティファクト",
-  },
-  article: {
-    task: "# この文章が答えるべき問い（依頼内容）",
-    source: "# 元資料（本文の主張はここで裏付けられている必要がある）",
-    fallback: "(提供なし。資料に無い断定が無いかは、依頼内容のみを基準に判断すること)",
-    body: "記事原稿",
-  },
-};
-
-function buildState({ task, sourceMaterial, artifact, note, scope }) {
-  const h = STATE_HEADINGS[scope] || STATE_HEADINGS.diagram;
-  const truncated = artifact.content.length > MAX_CONTENT;
-  const body = truncated ? artifact.content.slice(0, MAX_CONTENT) : artifact.content;
-  return [
-    h.task,
-    task,
-    "",
-    h.source,
-    sourceMaterial?.trim() || h.fallback,
-    "",
-    note ? `# 今回の変更点\n${note}\n` : "",
-    `# ${h.body} (${artifact.path}, ${artifact.bytes} bytes${truncated ? ", 先頭のみ" : ""})`,
-    body,
-  ]
-    .filter((s) => s !== "")
-    .join("\n");
-}
-
 function resolveRun(artifactPath, explicitRunId) {
   if (explicitRunId) return explicitRunId;
   const state = store.getState(REPO_ROOT);
@@ -160,6 +127,9 @@ server.registerTool(
     });
     return ok({
       ...describeClient(),
+      result_note:
+        "jev_review の result は pass / fail の2値。fail は修正して再検査（escalate が返ったら止める）、" +
+        "pass は出荷判定を人間に渡す。判定不能は fail（fail_reason: unknown）で、修正せず人間に返す。",
       repo_root: REPO_ROOT,
       scopes: SCOPES,
       default_scope: DEFAULT_SCOPE,
@@ -183,8 +153,10 @@ server.registerTool(
       "scope=article は図を伴わない文章用の18問（g1 / g4 / g5 / g6 記事としての構成）。" +
       "critical 項目は単独で群FAIL、それ以外は群内2件以上で群FAIL。" +
       "s7_originality（一次経験の裏打ち）は判定に算入せず、人間確認の対象として別枠で返る。" +
-      "反復の停滞・振動はサーバー側で判定し escalate に入れて返すので、" +
-      "空でなければ回すのをやめて人間に返すこと。" +
+      "result は合格/不合格の2値（pass = 群FAIL なし。単発の欠陥は合格で、fixes に参考として残る）。" +
+      "next_action に従うこと: fix_and_rereview は blocking の項目を直して再検査、" +
+      "stop_and_escalate は回すのをやめて人間に返す（反復の停滞・振動・上限、または判定不能）、" +
+      "hand_to_human は出荷判定をユーザーに渡す（s7 の人間確認つき。Jev は出荷可否を判定しない）。" +
       "結果は .jev/runs.jsonl に記録される。",
     inputSchema: {
       task: z.string().describe("この図解／記事が説明すべき仕組み・答えるべき問い。依頼内容をそのまま。"),
@@ -264,6 +236,8 @@ server.registerTool(
         provider_warnings: res.provider_warnings,
         rounding: res.rounding,
         polarity: result.polarity,
+        result: result.result,
+        fail_reason: result.fail_reason,
         verdict: result.verdict,
         clean_ratio: result.clean_ratio,
         items: result.items,
@@ -290,7 +264,31 @@ server.registerTool(
         last_escalate: escalation.escalate,
         last_seq: record.seq,
       });
+      // 判定を jev_label で付けるときに標本を組めるよう、入力を手元に残す（本文を含むので .jev/ 配下・commit しない）。
+      labels.saveReviewSnapshot(REPO_ROOT, record.seq, {
+        seq: record.seq,
+        scope: rubric.scope,
+        artifact: artifact.path,
+        task,
+        content: artifact.content,
+        source_material: source_material || null,
+        rubric_version: rubric.version,
+        client_mode: res.mode,
+        verdict: result.verdict,
+        failed_groups: result.failed_groups,
+      });
+      // 呼び出し側が次にやること。判断はここで済ませる（呼び出し側に委ねると忘れた瞬間に緩む）。
+      const next_action =
+        result.result === "pass"
+          ? "hand_to_human"
+          : result.fail_reason === "unknown" || escalation.escalate.length
+            ? "stop_and_escalate"
+            : "fix_and_rereview";
       return ok({
+        // 検査器の出力。pass / fail の2値。
+        result: result.result,
+        fail_reason: result.fail_reason,
+        next_action,
         seq: record.seq,
         run_id: runId,
         iteration,
@@ -406,6 +404,86 @@ server.registerTool(
   async () => {
     try {
       return ok({ client: describeClient(), ...store.summarize(REPO_ROOT) });
+    } catch (e) {
+      return fail(e);
+    }
+  }
+);
+
+// ── label: 出荷判定を記録する ───────────────────────────────────────────
+server.registerTool(
+  "jev_label",
+  {
+    title: "出荷判定を記録する",
+    description:
+      "検査した成果物について、ユーザー本人が出した出荷判定を記録する。ユーザーが報告した値だけを渡すこと（推測で埋めない）。" +
+      "human_verdict: pass = 出荷する / fail = 出荷しない。Jev の result と食い違った事例が閾値の較正に使われる。" +
+      "台帳 labels/ledger.jsonl には本文を書かない（リポジトリが public のため）。" +
+      "返り値の sample は本文を含むので Drive「99. Jev連携/labels」に保存し、台帳の変更は commit / push すること。",
+    inputSchema: {
+      seq: z.number().int().describe("jev_review が返した seq"),
+      human_verdict: z.enum(["pass", "fail"]).describe("pass = 出荷する / fail = 出荷しない"),
+      group_labels: z
+        .record(z.string(), z.enum(["pass", "fail"]))
+        .optional()
+        .describe("任意。群ごとに判定できたときだけ（例: { g5_epistemic: 'fail' }）"),
+      note: z.string().optional().describe("理由（任意）。台帳に残るので本文の引用は書かないこと"),
+    },
+  },
+  async ({ seq, human_verdict, group_labels, note }) => {
+    try {
+      const review = store.readAll(REPO_ROOT).find((r) => r.seq === seq && r.kind === "review");
+      if (!review) throw new Error(`seq ${seq} のレビューが .jev/runs.jsonl にありません。`);
+      const scope = review.scope || DEFAULT_SCOPE;
+      if (group_labels) {
+        const rubric = loadRubric(REPO_ROOT, scope);
+        const unknown = Object.keys(group_labels).filter((g) => !rubric.groups.some((x) => x.key === g));
+        if (unknown.length) throw new Error(`${scope} のルーブリックに無い群: ${unknown.join(", ")}`);
+      }
+      const jevResult = review.result ?? (["ship", "revise"].includes(review.verdict) ? "pass" : "fail");
+      const entry = labels.appendLabel(REPO_ROOT, {
+        review_seq: seq,
+        run_id: review.run_id,
+        scope,
+        rubric_version: review.rubric_version,
+        client_mode: review.mode,
+        jev_result: jevResult,
+        jev_verdict: review.verdict,
+        jev_failed_groups: review.failed_groups,
+        human_verdict,
+        agree: jevResult === human_verdict,
+        group_labels: group_labels ?? null,
+        note: note ?? null,
+      });
+      const snap = labels.readReviewSnapshot(REPO_ROOT, seq);
+      const sample = snap
+        ? {
+            id: entry.id,
+            scope,
+            task: snap.task,
+            content: snap.content,
+            source_material: snap.source_material,
+            human_verdict,
+            group_labels: group_labels ?? null,
+            label_source: "live",
+            rubric_version: entry.rubric_version,
+            jev_result: jevResult,
+            jev_failed_groups: entry.jev_failed_groups,
+          }
+        : null;
+      return ok({
+        recorded: entry,
+        sample,
+        save_sample_to: `Drive「99. Jev連携/labels」に ${entry.id}.json として保存（本文を含むのでリポジトリに commit しない）`,
+        commit: "labels/ledger.jsonl を commit / push すること（クラウドのコンテナは消える）",
+        warnings: [
+          review.mode !== "live" ? "stub の判定に付けた記録。Jev の判定がダミーなので較正には使えない。" : null,
+          jevResult === "pass" && human_verdict === "fail"
+            ? "Jev が合格にしたものを出荷しなかった（見逃し候補）。理由を note に残すと較正で原因を追える。"
+            : null,
+          snap ? null : "レビュー時の入力が .jev/reviews に無い（コンテナが入れ替わった可能性）。本文つきの標本は組めなかった。",
+        ].filter(Boolean),
+      });
     } catch (e) {
       return fail(e);
     }

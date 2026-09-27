@@ -383,7 +383,7 @@ Vercel にデプロイし（`api/probe.js`、CLI と同じ `mcp/probe-core.js` �
 | 3 | ~~3.3: `group_fail_at = 2`~~ | **対応済み。** 縮退は解消。両ルーブリックとも `unreachable` / `fragile` はゼロで、g1 も2件の欠陥で落ちる。報告経路（`unreachable_groups` / `fragile_groups`）は較正でいじったときの再発検出用に残してある |
 | 4 | ~~3.1: `g6_article_structure`（記事構造）~~ | **対応済み。** `rubric-article.json` に5問。`scope: "article"` で有効になる |
 | 5 | ~~2.3: `stagnation` / `oscillation` の群単位検出~~ | **対応済み。** `mcp/escalation.js` がサーバー側で群単位に判定し、`jev_review` が `escalate` / `escalation_reasons` で返す |
-| 6 | 7章: `samples.json` と `calibrate` | **未着手。閾値 0.70 / 0.50 / 2 は根拠のない初期値のまま。** 6章「順序の原則」に対して配線が先行している状態は解消していない |
+| 6 | 7章: `samples.json` と `calibrate` | **仕組みは実装済み、サンプル待ち。** `mcp/calibrate-core.js` が `interpret` をそのまま呼んでスイープする（Drive の `calibrate.js` は本体と判定が3点食い違うため不採用。理由はファイル冒頭）。Jev 呼び出しは Vercel の `/api/calibrate`、スイープは `npm run calibrate -- --from` で再現できる。**7.4 の差し戻し版の実物が Drive に無く、`samples.json` は未作成。閾値 0.70 / 0.50 / 2 は根拠のない初期値のまま** |
 | 7 | 5.2 / 8章 #1: probe を通す | **対応済み。** 手元の実行環境は egress で塞がれたままだが、Vercel 上に同じ検査（`api/probe.js`）を用意して 2026-09-23 に実キーで通した（A 節末尾） |
 
 ### ルーブリック差し替えで判明したこと
@@ -429,3 +429,36 @@ Vercel にデプロイし（`api/probe.js`、CLI と同じ `mcp/probe-core.js` �
 | 自己診断の強制 stub（`ZUKAI_FORCE_STUB=1`） | `.env` を置いた瞬間に `npm run check` が live に切り替わり、実行のたびに外部へ state を送って課金される状態だった。鍵をプロセスに入れない |
 | `jev_decide` の description に禁止事項 #4 を明記 | `jev_gate` を消しても、任意質問のパススルーから同等の判定を再構成できる。description はモデルが毎回読むので、キーワード検査より確実性が高い場面がある |
 | `overall` の廃止 | 実体は「欠陥なしと答えられた質問の割合」で品質スコアではない。コメントで否定しても名前が誤用を招くため、`clean_ratio` に一本化した |
+
+## F. 2026-09-25 本人決定（検査器の出力仕様）
+
+| 決定 | 内容 | 実装 |
+|---|---|---|
+| 出力は合格/不合格の2値 | ユースケースは「チャットで生成 → 検査 → 不合格なら修正 / 合格なら本人が出荷判定」。検査器に助言機能は求めない | `interpret` の `result`（`pass` / `fail`）と `fail_reason`。`jev_review` が `next_action` を返す |
+| `revise`（群FAIL なし・単発の欠陥あり）は合格 | 一致度約68%で欠陥1件を不合格にすると誤検出で毎回落ちる（3.3）。critical は単独で群FAIL になるので止まる | エスカレーション（`retry_limit` 等）も不合格の周でだけ発火するよう修正 |
+| 判定不能は不合格 | 禁止事項 #5。直す対象が無いので修正ループには回さず人間に返す | `fail_reason: "unknown"` → `next_action: stop_and_escalate` |
+| 出荷判定は本人が報告し、記録する | 「Jev は合格、本人は出荷しない」事例が較正の唯一の材料になる | `jev_label`。台帳 `labels/ledger.jsonl` |
+
+**Drive の「v0-release-advisory-mode.md」（助言モード）は採用しない。** 上の決定と矛盾するため。
+同文書と索引（00 calibration-sources.md）にある「ジレット記事は販売中の note に欠陥が残っている可能性」という前提は誤り。
+**ジレット記事はまだ出荷していない**（2026-09-25 本人）。
+
+### 公開範囲
+
+**このリポジトリは public。** 評価対象の本文（有料 note の原稿を含む）を commit しない。
+
+| 置き場所 | 中身 | commit |
+|---|---|---|
+| `labels/ledger.jsonl` | 判定の台帳（合否・群・所在）。本文なし | する |
+| `.jev/reviews/<seq>.json` | レビュー時の入力（本文あり） | しない（gitignore） |
+| Drive「99. Jev連携/labels」 | `jev_label` が返す本文つき標本 | —（非公開） |
+
+台帳には索引の人手判定6件（A01〜A04・D01・D02）を `label_source: "curated"` で登録した。
+A01〜A03 の本文は索引が「抽出済み」としているが Drive に無い。D01 は過去の承認なので現行基準での再判定待ち（`needs_rejudge`）。
+
+### 未解決：Claude Code 環境から Jev に届かない
+
+probe は Vercel 上で通った（A 節）が、`jev_review` を動かす Claude Code のクラウド環境は egress で
+`ai-gateway.vercel.sh` を遮断している。このままでは `jev_review` は常に stub（ダミー判定）になる。
+環境のネットワーク設定で同ホストを許可し、`AI_GATEWAY_API_KEY` を環境変数に設定すること。
+

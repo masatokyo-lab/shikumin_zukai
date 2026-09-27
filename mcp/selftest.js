@@ -9,7 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import {
@@ -175,6 +175,8 @@ check("interpret が scope を返す", clean.scope === "diagram", clean.scope);
 const oneDefect = run({ g2_missing_legend: 0.9 });
 check("probability 0.9 は欠陥と解釈される", oneDefect.defects.includes("g2_missing_legend"));
 check("欠陥1件（群FAILなし）は revise", oneDefect.verdict === "revise", oneDefect.verdict);
+check("単発の欠陥は合格（2026-09-25 本人決定）", oneDefect.result === "pass" && oneDefect.fail_reason === null);
+check("欠陥ゼロは合格", clean.result === "pass");
 
 // 非 critical の閾値は 0.70
 check("非critical 0.69 は欠陥ではない", run({ g2_missing_legend: 0.69 }).defects.length === 0);
@@ -184,6 +186,7 @@ check("非critical 0.70 は欠陥", run({ g2_missing_legend: 0.7 }).defects.incl
 const crit = run({ g3_question_mismatch: 0.5 });
 check("critical 0.50 は欠陥", crit.defects.includes("g3_question_mismatch"));
 check("critical 単独で群FAIL → block", crit.verdict === "block" && crit.failed_groups.includes("g3_text_figure_alignment"), `${crit.verdict} ${crit.failed_groups}`);
+check("群FAIL は不合格（fail / group_fail）", crit.result === "fail" && crit.fail_reason === "group_fail");
 check("critical 0.49 は欠陥ではない", run({ g3_question_mismatch: 0.49 }).defects.length === 0);
 
 // group_fail_at = 2
@@ -201,6 +204,7 @@ check("g1 は1件では群FAILしない", !run({ g1_omitted_subject: 0.9 }).fail
 const missing = run({}, { omit: ["g4_mixed_concerns"] });
 check("回答欠損で verdict は unknown", missing.verdict === "unknown", missing.verdict);
 check("欠損は ship にならない", missing.verdict !== "ship");
+check("判定不能は合格にしない（fail / unknown）", missing.result === "fail" && missing.fail_reason === "unknown");
 check("missing_answers に欠損キーが入る", missing.missing_answers.includes("g4_mixed_concerns"), String(missing.missing_answers));
 const outOfRange = run({ g4_mixed_concerns: { type: "boolean", probability: 1.5 } });
 check("範囲外の probability は欠損扱い", outOfRange.missing_answers.includes("g4_mixed_concerns") && outOfRange.verdict === "unknown");
@@ -259,6 +263,8 @@ check("retry_limit: 3周目で発火", esc({ iteration: 3, verdict: "block", fai
 check("retry_limit: 2周目では出ない", !esc({ iteration: 2, verdict: "block", failedGroups: ["g3"], previousFailedGroups: ["g9"] }).includes("retry_limit"));
 check("ship した周はエスカレーションしない", esc({ iteration: 5, verdict: "ship", failedGroups: [], previousFailedGroups: [] }).length === 0);
 check("通った周（FAIL群が空）で stagnation を出さない", !esc({ iteration: 2, verdict: "revise", failedGroups: [], previousFailedGroups: [] }).includes("stagnation"));
+check("合格（revise）の3周目で retry_limit を出さない", !esc({ iteration: 3, verdict: "revise", failedGroups: [], previousFailedGroups: [] }).includes("retry_limit"));
+check("判定不能の3周目は retry_limit を出す", esc({ iteration: 3, verdict: "unknown", failedGroups: [], previousFailedGroups: [] }).includes("retry_limit"));
 check("unknown でも retry_limit は効く", esc({ iteration: 3, verdict: "unknown", failedGroups: [], previousFailedGroups: [] }).includes("retry_limit"));
 check("理由文が付く", evaluateEscalation({ iteration: 3, verdict: "block", failedGroups: ["g3"], previousFailedGroups: ["g3"] }).reasons.every((r) => typeof r.reason === "string" && r.reason.length > 0));
 check("ルーブリックの max_retries は 3", R.escalation.max_retries === 3 && RA.escalation.max_retries === 3);
@@ -302,8 +308,8 @@ await client.connect(
 console.log(`\nMCP 往復 (sandbox: ${sandbox})`);
 
 const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-check("tools/list は 5 件", tools.length === 5, tools.join(", "));
-for (const t of ["jev_ping", "jev_review", "jev_decide", "jev_feed", "jev_status"]) {
+check("tools/list は 6 件", tools.length === 6, tools.join(", "));
+for (const t of ["jev_ping", "jev_review", "jev_decide", "jev_feed", "jev_status", "jev_label"]) {
   check(`tool present: ${t}`, tools.includes(t));
 }
 check("jev_gate は廃止されている", !tools.includes("jev_gate"));
@@ -311,6 +317,7 @@ check("jev_gate は廃止されている", !tools.includes("jev_gate"));
 const ping = parse(await client.callTool({ name: "jev_ping", arguments: {} }));
 check("自己診断は必ず stub で走る", ping.mode === "stub" && ping.forced_stub === true, `${ping.mode} forced=${ping.forced_stub}`);
 check("ping が鍵の env 名を返す", ping.key_env === "AI_GATEWAY_API_KEY");
+check("助言モードは無い（検査器は合否の2値）", !JSON.stringify(ping).includes("advisory"));
 check("ping が2本のルーブリックを返す", ping.rubrics.length === 2, String(ping.rubrics.length));
 const pingByScope = Object.fromEntries(ping.rubrics.map((r) => [r.scope, r]));
 check("ping が極性を返す", ping.rubrics.every((r) => r.polarity === "defect"));
@@ -336,6 +343,10 @@ const review = parse(
   })
 );
 check("review が verdict を返す", ["ship", "revise", "block", "unknown"].includes(review.verdict), review.verdict);
+check("review の result は pass / fail の2値", ["pass", "fail"].includes(review.result), review.result);
+check("result は群FAIL の有無と一致する", (review.result === "fail") === (review.failed_groups.length > 0 || review.verdict === "unknown"));
+const expectedNext = review.result === "pass" ? "hand_to_human" : review.fail_reason === "unknown" || review.escalate.length ? "stop_and_escalate" : "fix_and_rereview";
+check("next_action が合否とエスカレーションに従う", review.next_action === expectedNext, `${review.result} ${review.next_action}`);
 check("review の既定 scope は diagram", review.scope === "diagram", review.scope);
 check("review が22項目すべてを検査する", review.items.length === 22, String(review.items.length));
 check("review が全項目に probability を持つ", review.items.every((i) => typeof i.probability === "number" && i.probability >= 0 && i.probability <= 1));
@@ -377,8 +388,11 @@ if (review3.failed_groups.length) {
 } else {
   check("落ちていない周では stagnation しない", !review3.escalate.includes("stagnation"));
 }
-if (review3.verdict !== "ship") {
-  check("3周目で retry_limit も出る", review3.escalate.includes("retry_limit"), JSON.stringify(review3.escalate));
+if (review3.result === "fail") {
+  check("3周目で不合格なら retry_limit も出る", review3.escalate.includes("retry_limit"), JSON.stringify(review3.escalate));
+  check("エスカレーションしたら修正ループを止める", review3.next_action === "stop_and_escalate", review3.next_action);
+} else {
+  check("3周目で合格なら retry_limit を出さない", !review3.escalate.includes("retry_limit"));
 }
 
 // scope=article。別のアーティファクトなので別の run になる。
@@ -445,7 +459,113 @@ const traversal = await client.callTool({
 });
 check("リポジトリ外のパスは拒否される", traversal.isError === true);
 
+// ── E. 出荷判定の記録 ─────────────────────────────────────────────────
+console.log("\nE. 出荷判定の記録");
+const lab = parse(
+  await client.callTool({ name: "jev_label", arguments: { seq: review.seq, human_verdict: "fail", group_labels: { g5_epistemic: "fail" }, note: "出典未確認" } })
+);
+check("jev_label が台帳に記録する", lab.recorded?.review_seq === review.seq && /^live-\d{8}-001$/.test(lab.recorded.id), JSON.stringify(lab.recorded));
+check("Jev の合否と本人の判定の一致を残す", lab.recorded.jev_result === review.result && lab.recorded.agree === (review.result === "fail"));
+check("stub の判定に付けた記録だと警告する", lab.warnings.some((w) => w.includes("stub")));
+check("jev_label が本文つきの標本を返す", lab.sample?.content === SAMPLE && lab.sample.label_source === "live");
+const ledgerText = readFileSync(resolve(sandbox, "labels", "ledger.jsonl"), "utf8");
+check("台帳に本文を書かない（リポジトリが public）", !ledgerText.includes("受注入力") && ledgerText.includes(review.run_id));
+const badGroup = await client.callTool({ name: "jev_label", arguments: { seq: articleReview.seq, human_verdict: "pass", group_labels: { g2_figure_labeling: "pass" } } });
+check("別ルーブリックの群ラベルは拒否する", badGroup.isError === true);
+const noSeq = await client.callTool({ name: "jev_label", arguments: { seq: 9999, human_verdict: "pass" } });
+check("存在しない seq は拒否する", noSeq.isError === true);
+
 await client.close();
+
+// ── D. 較正（HANDOFF 7章）。Jev を呼ばず、作った回答で集計ロジックを検査する ─────────
+console.log("\nD. 較正");
+{
+  const cal = await import("./calibrate-core.js");
+  const rubric = loadRubric(pkgRoot, "diagram");
+  const nonCrit = (g) => rubric.questions.filter((q) => q.group === g && !q.critical).map((q) => q.key);
+  // 全問 0.1（critical 閾値 0.5 未満）を土台に、指定の質問だけ上げる。
+  const answersWith = (hi = {}, { drop = null, s7 = 3 } = {}) => {
+    const a = {};
+    for (const q of rubric.questions) if (q.key !== drop) a[q.key] = { type: "boolean", probability: hi[q.key] ?? 0.1 };
+    a[rubric.scored.key] = { type: "score", score: s7 };
+    return a;
+  };
+  const [g2a, g2b] = nonCrit("g2_figure_labeling");
+  const [g4a, g4b] = nonCrit("g4_granularity_flow");
+  check("較正用に非 critical の質問が g2 / g4 に2問ずつある", g2a && g2b && g4a && g4b);
+
+  const clean = answersWith();
+  check("欠陥なし → pass", cal.judgeAt(clean, rubric, 0.7).jev === "pass");
+  const twoG2 = answersWith({ [g2a]: 0.75, [g2b]: 0.75 });
+  check("同じ群で2件 0.75 → 閾値 0.7 で fail", cal.judgeAt(twoG2, rubric, 0.7).jev === "fail");
+  check("同じ群で2件 0.75 → 閾値 0.8 で pass", cal.judgeAt(twoG2, rubric, 0.8).jev === "pass");
+  check("欠陥1件（群FAIL なし＝revise）は pass に対応づく", cal.judgeAt(answersWith({ [g2a]: 0.9 }), rubric, 0.7).jev === "pass");
+  check("回答欠落 → unknown（pass に倒さない）", cal.judgeAt(answersWith({}, { drop: g2a }), rubric, 0.7).jev === "unknown");
+  // Drive 版 calibrate.js は s7 の score を verdict に入れ、しかも 0 起点のまま 4 と比べていた。
+  check("s7 が最低点でも verdict は落ちない（s7 は人間確認の別枠）", cal.judgeAt(answersWith({}, { s7: 0 }), rubric, 0.7).jev === "pass");
+
+  const svg = "<svg><text>x</text></svg>";
+  const samples = [
+    { id: "A", scope: "diagram", task: "t", content: svg, human_verdict: "fail", target_group: "g2_figure_labeling", boundary: true },
+    { id: "B", scope: "diagram", task: "t", content: svg, human_verdict: "pass" },
+    { id: "C", scope: "diagram", task: "t", content: svg, human_verdict: "pass" },
+  ];
+  const evals = [
+    { id: "A", scope: "diagram", rubric_version: rubric.version, mode: "live", answers: twoG2 },
+    { id: "B", scope: "diagram", rubric_version: rubric.version, mode: "live", answers: answersWith({ [g4a]: 0.65, [g4b]: 0.65 }) },
+    { id: "C", scope: "diagram", rubric_version: rubric.version, mode: "stub", answers: twoG2 },
+  ];
+  const rep = cal.buildReport(samples, evals, { repoRoot: pkgRoot }).scopes.diagram;
+  const at = (th) => rep.threshold_sweep.find((s) => s.threshold === th);
+  check("stub の回答は集計から外す", rep.n === 2 && rep.warnings.some((w) => /stub/.test(w)));
+  check("閾値 0.6 以下では B を過剰に落とす", at(0.5).too_strict === 1 && at(0.6).too_strict === 1);
+  check("閾値 0.8 以上では A を見逃す", at(0.8).too_lenient === 1 && at(0.9).too_lenient === 1);
+  check("一致率最大の 0.7 を採用する", rep.chosen_threshold === 0.7 && rep.agreement_rate === 1, JSON.stringify(rep.threshold_sweep));
+  check("意図した群で落ちたかを見る", rep.rows.find((r) => r.id === "A").caught_intended === true);
+  check("境界事例の一致率を出す", rep.boundary_agreement === 1);
+  check("s7 / critical / group_fail_at が較正対象外だと明記する", rep.not_calibrated.length === 3);
+
+  const tie = cal.buildReport(samples.slice(1, 2), evals.slice(1, 2), { repoRoot: pkgRoot }).scopes.diagram;
+  check("同点なら現行値に近い閾値を選び、同点を警告する", tie.chosen_threshold === 0.7 && tie.warnings.some((w) => /同点/.test(w)), JSON.stringify(tie.threshold_sweep));
+
+  const round = cal.expandEvaluations(cal.compactEvaluations(evals));
+  check(
+    "貼り戻し用 JSON を戻しても判定が変わらない",
+    round.every((e, i) => cal.judgeAt(e.answers, rubric, 0.7).jev === cal.judgeAt(evals[i].answers, rubric, 0.7).jev) &&
+      round[0].answers[rubric.scored.key].score === 3
+  );
+
+  const bad = cal.validateSamples(
+    [
+      { id: "x", scope: "poster", task: "t", content: "c", human_verdict: "fail" },
+      { id: "x", scope: "diagram", task: "t", content: "c", human_verdict: "maybe" },
+      { id: "y", scope: "diagram", task: "t", content: "c", human_verdict: "fail", target_group: "g6_article_structure" },
+      { id: "z", scope: "diagram", task: "t", content: "x".repeat(70000), human_verdict: "fail" },
+    ],
+    pkgRoot
+  );
+  check("未知の scope を弾く", bad.errors.some((e) => /x: scope/.test(e)));
+  check("id の重複を弾く", bad.errors.some((e) => /重複/.test(e)));
+  check("human_verdict の値を検査する", bad.errors.some((e) => /human_verdict/.test(e)));
+  check("別ルーブリックの群を target_group に書くと弾く", bad.errors.some((e) => /g6_article_structure/.test(e)));
+  check("長すぎる content は切り詰めずに弾く", bad.errors.some((e) => /z: content が/.test(e)));
+  check("pass が0件なら警告する", bad.warnings.some((w) => /pass が0件/.test(w)));
+
+  const { default: calibrateApi } = await import("../api/calibrate.js");
+  const call = async (env, path) => {
+    const saved = process.env.PROBE_TOKEN;
+    if (env === undefined) delete process.env.PROBE_TOKEN;
+    else process.env.PROBE_TOKEN = env;
+    const res = { statusCode: 0, headers: {}, body: "", setHeader(k, v) { this.headers[k] = v; }, end(b) { this.body = b; } };
+    await calibrateApi({ url: path, headers: { host: "t" } }, res);
+    if (saved === undefined) delete process.env.PROBE_TOKEN;
+    else process.env.PROBE_TOKEN = saved;
+    return res;
+  };
+  check("PROBE_TOKEN 未設定なら /api/calibrate は実行しない", (await call(undefined, "/api/calibrate")).statusCode === 403);
+  check("token 違いは 401", (await call("s", "/api/calibrate?token=x")).statusCode === 401);
+  check("stub では較正しない", (await call("s", "/api/calibrate?token=s")).statusCode === 503);
+}
 
 console.log(fails.length ? `\n${fails.length} failed: ${fails.join(", ")}` : `\nall ok — ${"mode="}${ping.mode}`);
 process.exit(fails.length ? 1 : 0);
