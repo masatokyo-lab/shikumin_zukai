@@ -366,6 +366,49 @@ Vercel にデプロイし（`api/probe.js`、CLI と同じ `mcp/probe-core.js` �
 8章 #1 は解消。5.2「score の返り値の下限」は実測でも 0 起点と確定。
 一致度・較正済みの確信度は依然未検証（7章 C-6 待ち）。
 
+**2026-09-26 追記：手元（Claude Code on the web）からも live で届くようになった。**
+`npm run probe` が `mode: "live"` で all ok。極性の向きも記録できた（1サンプルなので参考値）：
+出典なき数値あり `probability=0.98`、SVGを含む `0.01`、score raw `0.08`（0起点）。
+MCP 経由の `jev_ping` も `mode: "live"`、両ルーブリック v0.4.0（22問 / 18問）、unreachable / fragile ゼロ。
+
+セッション開始時に `zukai-jev` MCP が `Connection closed` で落ちたのは、クローン直後で
+`node_modules` が無く `mcp/server.js` の import が失敗したため。`npm ci` 後は起動する。
+
+**R1 ルーブリックでの初回 live 実行**（`jev_review`、scope `diagram`、`artifacts/jev-loop.html`、
+run `run_20260926081946_1zqa`、5,236 tokens、585ms）：
+
+| 群 | 判定 | 欠陥（probability / 閾値） |
+|---|---|---|
+| g1_traceability | pass | なし（最大 `g1_omitted_subject` 0.54） |
+| g2_figure_labeling | **FAIL** | `g2_axis_meaning_unclear` 0.65 / 0.50（critical） |
+| g3_text_figure_alignment | **FAIL** | `g3_missing_time_axis` 0.68 / 0.50（critical） |
+| g4_granularity_flow | pass | なし（最大 `g4_abrupt_abstraction_jump` 0.46） |
+| g5_epistemic | **FAIL** | `g5_unmarked_speculation` 0.75、`g5_fabricated_specificity` 0.83 |
+
+`verdict: block`、`clean_ratio: 0.818`、s7 は level 3.47（threshold 4 未達、人間確認待ち）。
+**この判定を品質の根拠にしないこと**（閾値は較正前、禁止事項 #6）。特に g2 / g3 の2件は
+フロー図に「軸」「時間軸」を求める空振りの疑いがある（ここは推測）。critical 閾値 0.50 の
+近傍（0.65 / 0.68）で落ちており、7章の較正で g2 / g3 の境界事例（8章 #4）を作る動機になる。
+
+**article ルーブリックの初回 live 実行：ジレット note 3版**（2026-09-26、run `gillette-note-20260926`）。
+Drive「01. ジレットモデル」の `gillette full.docx` / `v2` / `v3` を scope `article`、
+source_material に【根拠資料】を渡して順に検査した。本文は有料 note なのでリポジトリには置かない。
+
+| 版 | verdict | FAIL群 | g5 3問（critical） | g6 最大 | s7 level | escalate |
+|---|---|---|---|---|---|---|
+| v1（初稿） | block | g5 | 0.83 / 0.73 / 0.89 | filler 0.66 | 2.78 | — |
+| v2 | block | g5 | 0.82 / 0.73 / 0.84 | filler 0.64 | 2.88 | stagnation |
+| v3 | block | g5 | 0.80 / 0.72 / 0.90 | filler 0.62 | 2.89 | retry_limit, stagnation |
+
+- **g5 は当たり。**`gillette-factcheck-corrected.pdf` の B3（「150〜200ドル」換算は Picker に無い）は、
+  `g5_source_granularity_gap`（Picker を出典に挙げながら個別の数値に出典が対応していない）そのもの。
+  原稿は訂正未反映（8章 #5）なので、3版とも落ちるのは正しい。7.4 の「裏取り資料 / g5 / boundary」と同じ欠陥を拾えている。
+- **g6 は外れ。**7.4 では v1 は「6ギャップ」（本文が薄い・型定義が浅い・ペルソナの具体性不足）で人間判定 fail。
+  Jev の g6 は全問 0.07〜0.66 で1件も立たない。合否は一致しているが**理由が違う**（7.2 の `caught_intended` が偽になるケース）。
+  v2 / v3 で `g6_no_downside` 0.16→0.06、`g6_not_actionable` 0.22→0.14 と改稿の向きには動いているが、閾値 0.70 には遠い。
+- `g4_abrupt_abstraction_jump` が 0.69 / 0.71 / 0.70 と閾値の上下を往復している。閾値ちょうどの項目は判定が揺れる実例。
+- 3版は同じ記事の改稿なので独立サンプルではない。較正の母数としては実質1件。
+
 ## B. 原文の記述ミスと判断したもの
 
 | 箇所 | 原文 | 実体 |
@@ -384,7 +427,7 @@ Vercel にデプロイし（`api/probe.js`、CLI と同じ `mcp/probe-core.js` �
 | 4 | ~~3.1: `g6_article_structure`（記事構造）~~ | **対応済み。** `rubric-article.json` に5問。`scope: "article"` で有効になる |
 | 5 | ~~2.3: `stagnation` / `oscillation` の群単位検出~~ | **対応済み。** `mcp/escalation.js` がサーバー側で群単位に判定し、`jev_review` が `escalate` / `escalation_reasons` で返す |
 | 6 | 7章: `samples.json` と `calibrate` | **仕組みは実装済み、サンプル待ち。** `mcp/calibrate-core.js` が `interpret` をそのまま呼んでスイープする（Drive の `calibrate.js` は本体と判定が3点食い違うため不採用。理由はファイル冒頭）。Jev 呼び出しは Vercel の `/api/calibrate`、スイープは `npm run calibrate -- --from` で再現できる。**7.4 の差し戻し版の実物が Drive に無く、`samples.json` は未作成。閾値 0.70 / 0.50 / 2 は根拠のない初期値のまま** |
-| 7 | 5.2 / 8章 #1: probe を通す | **対応済み。** 手元の実行環境は egress で塞がれたままだが、Vercel 上に同じ検査（`api/probe.js`）を用意して 2026-09-23 に実キーで通した（A 節末尾） |
+| 7 | 5.2 / 8章 #1: probe を通す | **対応済み。** 2026-09-23 に Vercel 上の `api/probe.js` で実キー疎通。2026-09-26 に手元からも live で通った（A 節末尾） |
 
 ### ルーブリック差し替えで判明したこと
 
